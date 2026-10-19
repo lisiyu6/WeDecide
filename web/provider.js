@@ -11,7 +11,7 @@ export function providerFields(provider={}) {
         ['custom','自定义 JSON HTTP']
       ])}
       ${field('模型名称（手动输入或从下方列表选择）','model',provider.model || '','text','placeholder="填写供应商提供的模型 ID" maxlength="200"')}
-      ${field('完整请求端点','endpoint',provider.endpoint || '','url','class="mono" placeholder="https://api.example.com/v1/chat/completions" maxlength="2000"')}
+      ${field('API 地址（基址或完整请求 URL）','endpoint',provider.endpoint || '','url','class="mono" placeholder="https://api.example.com/v1/chat/completions" maxlength="2000"')}
       ${field(provider.has_key?'API 密钥（已保存，留空保留）':'API 密钥','api_key','','password','autocomplete="new-password" placeholder="只保存在服务端" maxlength="4096"')}
     </div>
     <div class="model-discovery">
@@ -33,7 +33,7 @@ export function providerFields(provider={}) {
     </div>
     <details class="advanced">
       <summary>高级接口与请求配置</summary>
-      <p class="hint">填写完整请求 URL；不自动拼接对话路径。Anthropic 常用鉴权头为 x-api-key，前缀留空。额外请求头已有值不会返回浏览器，同名空值表示保留，删除键可移除。</p>
+      <p class="hint">OpenAI 兼容接口支持根地址、/v1 基址或完整请求 URL；其他协议填写完整请求 URL。Anthropic 常用鉴权头为 x-api-key，前缀留空。额外请求头已有值不会返回浏览器，同名空值表示保留，删除键可移除。</p>
       <div class="form-grid">
         ${field('鉴权请求头','auth_header',provider.auth_header || 'Authorization')}
         ${field('鉴权前缀（含空格）','auth_prefix',provider.auth_prefix ?? 'Bearer ')}

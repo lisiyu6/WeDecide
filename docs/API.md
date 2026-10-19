@@ -96,3 +96,5 @@ AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化�
 - [python-qrcode SVG 生成](https://github.com/lincolnloop/python-qrcode)
 
 模型列表标准结构参考：[OpenAI List models](https://developers.openai.com/api/reference/resources/models/methods/list)。第三方实现可通过列表路径和 ID 字段适配。
+
+OpenAI 兼容供应商的 `endpoint` 可填根地址或以 `/v1` 结尾的基址，聊天分别补全 `/v1/chat/completions` 或 `/chat/completions`；完整端点保持原样，模型发现从同一规范地址推导。Anthropic、自定义协议不补全。

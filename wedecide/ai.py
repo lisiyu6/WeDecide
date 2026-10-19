@@ -96,6 +96,22 @@ def extract_path(value, path):
     return value
 
 
+def request_endpoint(provider):
+    """Accept common OpenAI bases while preserving complete/custom request URLs."""
+    endpoint = provider.get("endpoint", "").strip()
+    if provider.get("protocol") != "openai" or not endpoint:
+        return endpoint
+    url = urlsplit(endpoint)
+    path = url.path.rstrip("/")
+    if not path:
+        path = "/v1/chat/completions"
+    elif path.endswith("/v1"):
+        path += "/chat/completions"
+    else:
+        return endpoint
+    return urlunsplit((url.scheme, url.netloc, path, "", ""))
+
+
 async def request(provider, system, messages):
     if not provider.get("endpoint") or not provider.get("model"):
         raise AIError("AI 接口尚未填写完整端点或模型名称")
@@ -117,7 +133,7 @@ async def request(provider, system, messages):
         path = provider["response_path"] or "choices.0.message.content"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(provider["timeout"], connect=10), limits=httpx.Limits(max_connections=1, max_keepalive_connections=0), follow_redirects=False, trust_env=False) as client:
-            async with client.stream("POST", provider["endpoint"], headers=headers(provider), json=body) as response:
+            async with client.stream("POST", request_endpoint(provider), headers=headers(provider), json=body) as response:
                 if response.status_code >= 300:
                     raise AIError(f"第三方接口返回 HTTP {response.status_code}，请检查端点、模型和鉴权配置")
                 chunks = bytearray()
@@ -137,9 +153,9 @@ def models_endpoint(provider):
     explicit = provider.get("models_endpoint", "").strip()
     if explicit:
         return explicit
-    endpoint = provider.get("endpoint", "").strip()
+    endpoint = request_endpoint(provider)
     if not endpoint:
-        raise AIError("请先填写完整请求端点，或单独填写模型列表地址")
+        raise AIError("请先填写接口地址，或单独填写模型列表地址")
     url = urlsplit(endpoint)
     path = url.path.rstrip("/")
     for suffix in ("/chat/completions", "/messages", "/responses"):
