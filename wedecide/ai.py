@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import time
+from urllib.parse import urlsplit, urlunsplit
 import httpx
 from . import store
 from .models import Preference, Resource, Scenario
@@ -132,30 +133,93 @@ async def request(provider, system, messages):
         raise AIError("AI 请求失败或响应结构不匹配，请检查接口配置后重试") from None
 
 
-async def discover_models(provider):
-    endpoint = provider["endpoint"]
-    for suffix in ("/chat/completions", "/messages"):
-        if endpoint.endswith(suffix):
-            endpoint = endpoint[:-len(suffix)] + "/models"
+def models_endpoint(provider):
+    explicit = provider.get("models_endpoint", "").strip()
+    if explicit:
+        return explicit
+    endpoint = provider.get("endpoint", "").strip()
+    if not endpoint:
+        raise AIError("请先填写完整请求端点，或单独填写模型列表地址")
+    url = urlsplit(endpoint)
+    path = url.path.rstrip("/")
+    for suffix in ("/chat/completions", "/messages", "/responses"):
+        if path.endswith(suffix):
+            path = path[:-len(suffix)] + "/models"
             break
     else:
-        raise AIError("仅标准 /chat/completions 或 /messages 端点支持模型发现；自定义接口请手动填写模型")
+        if not path or path.endswith("/v1"):
+            path += "/models"
+        elif not path.endswith("/models"):
+            raise AIError("无法从这个端点推导模型列表地址，请在表单中填写模型列表地址")
+    return urlunsplit((url.scheme, url.netloc, path, "", ""))
+
+
+def lookup_path(value, path):
+    if path:
+        for part in path.split("."):
+            value = value[int(part)] if isinstance(value, list) else value[part]
+    return value
+
+
+def model_ids(data, provider):
+    path = provider.get("models_path", "data")
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict) and path == "data" and "data" not in data and isinstance(data.get("models"), list):
+        items = data["models"]
+    else:
+        try:
+            items = lookup_path(data, path)
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise AIError("模型列表路径不存在，请检查列表路径配置") from None
+    if not isinstance(items, list):
+        raise AIError("模型列表路径必须指向 JSON 数组")
+    field = provider.get("model_id_field", "id")
+    result = set()
+    for item in items:
+        if isinstance(item, str):
+            value = item
+        elif isinstance(item, dict):
+            try:
+                value = lookup_path(item, field)
+            except (KeyError, IndexError, TypeError, ValueError):
+                value = item.get("name") if field == "id" else None
+        else:
+            value = None
+        if isinstance(value, str) and 0 < len(value.strip()) <= 200:
+            result.add(value.strip())
+    if items and not result:
+        raise AIError("返回的模型条目中没有有效 ID，请检查模型 ID 字段配置")
+    return sorted(result)[:1000]
+
+
+async def discover_models(provider):
+    endpoint = models_endpoint(provider)
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
-            async with client.stream("GET", endpoint, headers=headers(provider)) as response:
-                if response.status_code >= 300:
-                    raise AIError(f"模型列表请求返回 HTTP {response.status_code}")
-                raw = bytearray()
-                async for chunk in response.aiter_bytes():
-                    raw.extend(chunk)
-                    if len(raw) > 1024 * 1024:
-                        raise AIError("模型列表超过大小限制")
-                data = json.loads(raw)
-        return sorted({str(x["id"])[:200] for x in data.get("data", []) if isinstance(x, dict) and "id" in x})[:300]
+        async with asyncio.timeout(min(provider.get("timeout", 60), 45)):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5), limits=httpx.Limits(max_connections=1, max_keepalive_connections=0), follow_redirects=False, trust_env=False) as client:
+                async with client.stream("GET", endpoint, headers=headers(provider)) as response:
+                    if response.status_code >= 300:
+                        if response.status_code in {401, 403}:
+                            raise AIError(f"模型列表鉴权失败（HTTP {response.status_code}），请检查密钥、鉴权头及前缀")
+                        if response.status_code == 404:
+                            raise AIError("模型列表地址不存在（HTTP 404），请填写供应商提供的模型列表地址")
+                        raise AIError(f"模型列表请求返回 HTTP {response.status_code}")
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > 1024 * 1024:
+                            raise AIError("模型列表超过 1 MB 限制")
+                    data = json.loads(raw)
+        return model_ids(data, provider)
     except AIError:
         raise
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        raise AIError("无法读取模型列表，可手动填写模型名称") from None
+    except (TimeoutError, httpx.TimeoutException):
+        raise AIError("拉取模型超时，请稍后重试或检查模型列表地址") from None
+    except httpx.HTTPError:
+        raise AIError("无法连接模型列表服务，请检查地址与连接配置") from None
+    except (ValueError, KeyError, TypeError):
+        raise AIError("模型列表不是有效 JSON，或返回结构与配置不匹配") from None
 
 
 def parse_json(text):

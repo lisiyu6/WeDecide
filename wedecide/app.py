@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from . import ai, domain, engine, store
 from .cli import verify_password
 from .config import WEB_DIR, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
-from .models import AIInput, CreateRoom, JoinRoom, Login, Mutation
+from .models import AIInput, CreateRoom, JoinRoom, Login, ModelDiscovery, Mutation
 from .realtime import Hub
 
 hub = Hub()
@@ -349,12 +349,18 @@ async def save_provider(key: str, request: Request):
 
 
 @app.post("/api/rooms/{key}/provider/models")
-async def room_models(key: str, request: Request):
+async def room_models(key: str, data: ModelDiscovery, request: Request):
     uid = authenticated(request)
     room = current_room(key)
     domain.host(room, uid)
-    provider = ai.resolve_provider(store.settings(), room)
-    domain.require(provider is not None, "请先保存可用接口")
+    if data.provider is not None:
+        provider = ai.merge_provider(data.provider.model_dump(), room["provider"])
+    else:
+        selection = dict(room)
+        if data.provider_id is not None:
+            selection.update(provider=None, provider_id=data.provider_id)
+        provider = ai.resolve_provider(store.settings(), selection)
+    domain.require(provider is not None, "请先选择全局接口或填写房间专用接口")
     return {"models": await bounded_call(("models", uid), lambda: ai.discover_models(provider))}
 
 
@@ -461,6 +467,19 @@ async def admin_save(request: Request):
     async with coordinator.condition:
         coordinator.condition.notify_all()
     return safe_config(config)
+
+
+@app.post("/api/admin/providers/models")
+async def admin_draft_models(data: ModelDiscovery, request: Request):
+    uid = authenticated(request, True)
+    domain.require(data.provider is not None, "请填写接口配置")
+    old = None
+    if data.saved_provider_id:
+        old = next((p for p in store.settings()["providers"] if p["id"] == data.saved_provider_id), None)
+        domain.require(old is not None, "原供应商已被移除，请重新打开配置", 409)
+        domain.require(data.provider.id == data.saved_provider_id, "编辑期间不能变更原供应商 ID")
+    provider = ai.merge_provider(data.provider.model_dump(), old)
+    return {"models": await bounded_call(("models", uid), lambda: ai.discover_models(provider))}
 
 
 @app.post("/api/admin/providers/{provider_id}/models")

@@ -12,6 +12,9 @@ class Provider(Model):
     protocol: Literal["openai", "anthropic", "custom"] = "openai"
     endpoint: str = Field(default="", max_length=2000)
     model: str = Field(default="", max_length=200)
+    models_endpoint: str = Field(default="", max_length=2000)
+    models_path: str = Field(default="data", max_length=200)
+    model_id_field: str = Field(default="id", min_length=1, max_length=100)
     api_key: str = Field(default="", max_length=4096)
     clear_key: bool = False
     auth_header: str = Field(default="Authorization", pattern=r"^[A-Za-z0-9-]{1,80}$")
@@ -25,7 +28,7 @@ class Provider(Model):
     temperature: float = Field(default=0.5, ge=0, le=2)
     enabled: bool = True
 
-    @field_validator("endpoint")
+    @field_validator("endpoint", "models_endpoint")
     @classmethod
     def valid_endpoint(cls, value):
         if value:
@@ -42,6 +45,12 @@ class Provider(Model):
             if any(c in k + v for c in "\r\n"):
                 raise ValueError("鉴权与请求头不能含换行")
         return self
+
+class ModelDiscovery(Model):
+    provider: Provider | None = None
+    saved_provider_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,48}$")
+    provider_id: str | None = Field(default=None, max_length=48)
+
 
 class Preference(Model):
     budget_max: float | None = Field(default=None, ge=0, le=1000000)
