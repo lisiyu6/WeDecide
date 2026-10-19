@@ -1,4 +1,4 @@
-import {$,$$,esc,icon,field,textarea,select,check,formData,jsonField,number} from './common.js';
+import {$,$$,esc,icon,field,textarea,select,check,formData,formId,jsonField,number} from './common.js';
 
 export function providerFields(provider={}) {
   return `<div data-provider-editor>
@@ -69,7 +69,7 @@ export function readProvider(form) {
 // the room's SSE rerenders and is bounded across recently opened provider forms.
 const pickers=new Map();
 let discover=null,installed=false;
-const scope=form=>form.dataset.modelScope || form.id;
+const scope=form=>form.dataset.modelScope || formId(form);
 const signature=form=>JSON.stringify(['protocol','endpoint','models_endpoint','models_path','model_id_field'].map(name=>form.elements.namedItem(name)?.value||''));
 const currentForm=key=>$$('form[data-model-scope]').find(form=>scope(form)===key);
 function picker(form) {

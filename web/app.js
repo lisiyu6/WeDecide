@@ -1,4 +1,4 @@
-import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
+import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
 import {home,creation,joinPage,waiting} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
@@ -149,9 +149,9 @@ const handlers={
 
 async function submit(form) {
  const d=formData(form);
- switch(form.id){
+ switch(formId(form)){
   case 'join-home':case 'join-direct':{
-   let code=form.id==='join-home'?d.code.trim():state.code;
+   let code=formId(form)==='join-home'?d.code.trim():state.code;
    if(code.includes('/r/'))code=code.split('/r/')[1].split(/[?#/]/)[0];
    const room=await post(`/api/join/${encodeURIComponent(code)}`,{username:d.username});navigate(`/r/${room.code}`);break;
   }
@@ -192,10 +192,10 @@ async function submit(form) {
    const resources=d.id?state.room.resources.map(r=>r.id===d.id?resource:r):[...state.room.resources,resource];
    await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('候选活动已保存');break;
   }
-  case 'room-settings':await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[form.id]);toast('场景与规则已更新');break;
+  case 'room-settings':await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
   case 'room-provider':{
-   await api(roomPath('/provider'),{method:'PUT',body:{revision:state.formRevisions[form.id]??state.room.revision,provider_id:d.provider_id,provider:d.mode==='custom'?readProvider(form):null}});
-   state.provider=null;state.dirtyForms.delete(form.id);delete state.formRevisions[form.id];await refresh(false);toast('接口配置已保存');break;
+   await api(roomPath('/provider'),{method:'PUT',body:{revision:state.formRevisions[formId(form)]??state.room.revision,provider_id:d.provider_id,provider:d.mode==='custom'?readProvider(form):null}});
+   state.provider=null;state.dirtyForms.delete(formId(form));delete state.formRevisions[formId(form)];await refresh(false);toast('接口配置已保存');break;
   }
   case 'finish-form':await mutate('finish',{outcome:d.outcome,explanation:d.explanation});$('#dialog').close();navigate(`/r/${state.room.code}?view=result`);break;
  }
@@ -216,15 +216,15 @@ document.addEventListener('submit',async event=>{
 });
 document.addEventListener('input',event=>{
  const form=event.target.form;if(!form)return;
- state.dirtyForms.add(form.id);
- if(state.room)state.formRevisions[form.id]??=state.room.revision;
- if(form.id==='preference-form'){
+ state.dirtyForms.add(formId(form));
+ if(state.room)state.formRevisions[formId(form)]??=state.room.revision;
+ if(formId(form)==='preference-form'){
    state.prefDraft={preference:readPreference(form),preference_version:state.prefDraft?.preference_version??state.room.me.preference_version};saveDraft(draftKey(),state.prefDraft);
- }else if(form.id==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
- else if(form.id==='vote-form'){state.voteSession??=state.room.vote.id;}
- else if(form.id==='fairness-sim'){state.simFairness=Number(event.target.value)/100;$('#fairness-label').textContent=`${event.target.value}%`;}
- else if(form.id==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
- else if(form.id==='scenario-ai'){state.creationDraft.raw=event.target.value;saveDraft('wd-create',state.creationDraft);}
+ }else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
+ else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
+ else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;$('#fairness-label').textContent=`${event.target.value}%`;}
+ else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
+ else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;saveDraft('wd-create',state.creationDraft);}
 });
 document.addEventListener('change',event=>{
  const form=event.target.form;

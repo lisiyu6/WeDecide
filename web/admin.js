@@ -1,4 +1,4 @@
-import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,field,textarea,select,badge,dateTime,formData,empty,captureInputs,restoreInputs} from './common.js';
+import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,field,textarea,select,badge,dateTime,formData,formId,empty,captureInputs,restoreInputs} from './common.js';
 import {providerFields,readProvider,installProviderModels,renderProviderModels,fetchProviderModels} from './provider.js';
 let config=null,rooms=[],stats={},tab='limits',editing=null,editor=null;
 function login(){config=null;editor=null;editing=null;$('#app').innerHTML=`<main class="admin-login">${logo}<section class="card"><div class="eyebrow" style="margin-bottom:9px">ADMINISTRATION</div><h1>管理员控制台</h1><p class="hint" style="margin-top:12px">使用在后端 CLI 设置的密码登录。</p><form id="admin-login">${field('管理员密码','password','','password','required autocomplete="current-password" maxlength="256"')}<button class="button" style="width:100%" type="submit">进入管理控制台 ${icon('arrow',15)}</button></form><p class="hint" style="margin-top:20px">初次使用：在后端运行<br><code>python -m wedecide.cli admin-password</code></p></section></main>`;}
@@ -59,7 +59,7 @@ document.addEventListener('click',async event=>{
 document.addEventListener('submit',async event=>{
  if(!(event.target instanceof HTMLFormElement))return;
  event.preventDefault();const form=event.target,d=formData(form),button=event.submitter;if(button)button.disabled=true;
- try{switch(form.id){
+ try{switch(formId(form)){
   case 'admin-login':await post('/api/admin/login',{password:d.password});await start();break;
   case 'admin-limits':await save(Object.fromEntries(Object.entries(d).map(([k,v])=>[k,Number(v)])));break;
   case 'admin-default':await save({default_provider:d.default_provider});break;
