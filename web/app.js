@@ -1,5 +1,5 @@
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
-import {home,creation,joinPage,waiting} from './pages.js';
+import {home,creation,joinPage,waiting,accountPage} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
 import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep} from './preferences.js';
@@ -8,14 +8,17 @@ const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:
 let stream=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
 const roomPath=suffix=>`/api/rooms/${encodeURIComponent(state.room.id)}${suffix}`;
 const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
-const chatKey=()=>`wd-chat:${state.room.id}:${state.chatMode}`;
+const chatKey=()=>`wd-chat:${state.room.id}:${state.room.me.id}:${state.chatMode}`;
+function accountNext(value='/'){try{const url=new URL(value,location.origin);return url.origin===location.origin&&!['/login','/admin'].includes(url.pathname)?url.pathname+url.search:'/';}catch{return '/';}}
+function showAccount(next,mode=null){state.route='auth';state.room=null;state.authNext=accountNext(next);state.authMode=mode||(state.bootstrap.has_legacy_rooms?'register':'login');render();}
 function render(preserve=false) {
  const root=$('#app');
  const saved=preserve?captureInputs(root):null;
  if(saved)saved.values=saved.values.filter(v=>state.dirtyForms.has(v.form)&&!(v.form==='preference-form'&&(terminal.has(state.room?.state)||state.room?.state==='VOTING')));
  if(state.route==='home')root.innerHTML=home(state.rooms,state.bootstrap);
  else if(state.route==='new')root.innerHTML=creation(state.bootstrap,state.creationDraft);
- else if(state.route==='join')root.innerHTML=joinPage(state.code);
+ else if(state.route==='join')root.innerHTML=joinPage(state.code,state.bootstrap);
+ else if(state.route==='auth')root.innerHTML=accountPage(state.bootstrap,state.authMode,state.authNext);
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state):waiting(state.room);
  if(saved)restoreInputs(root,saved);
  const roomView=state.route==='room'&&state.room?.me.status==='approved'?$('#room-view',root):null;
@@ -72,7 +75,8 @@ async function route() {
    if(parts[0]==='display'&&parts[1]){state.route='display';await showDisplay(parts[1],version);if(version===routeVersion)displayTimer=setInterval(()=>showDisplay(parts[1],version),8000);return;}
    if(!state.bootstrap){const bootstrap=await api('/api/bootstrap');if(version!==routeVersion)return;state.bootstrap=bootstrap;}
    if(version!==routeVersion)return;
-   if(parts[0]==='new'){state.route='new';state.room=null;render();return;}
+   if(parts[0]==='login'){showAccount(url.searchParams.get('next')||'/',url.searchParams.get('mode')==='register'?'register':'login');return;}
+   if(parts[0]==='new'){if(!state.bootstrap.account){showAccount('/new');return;}state.route='new';state.room=null;render();return;}
    if(parts[0]==='r'&&parts[1]){
      const code=parts[1];
      const tab=tabs.some(t=>t[0]===url.searchParams.get('view'))?url.searchParams.get('view'):'overview';
@@ -80,7 +84,7 @@ async function route() {
      let room;
      try{room=await api(`/api/rooms/${encodeURIComponent(code)}`);}catch(error){
        if(version!==routeVersion)return;
-       if(error.status===403){state.route='join';state.code=code;state.room=null;render();return;}
+       if(error.status===401||error.status===403){if(!state.bootstrap.account){showAccount(url.pathname+url.search);return;}if(error.status===403){state.route='join';state.code=code;state.room=null;render();return;}}
        throw error;
      }
      if(version!==routeVersion)return;
@@ -127,7 +131,8 @@ installProviderModels(form=>{
  return post(roomPath('/provider/models'),{provider:readProvider(form)});
 });
 const handlers={
- 'menu':()=>{state.menu=!state.menu;$('.sidebar')?.classList.toggle('open',state.menu);},
+ 'menu':()=>{state.menu=!state.menu;$('.sidebar')?.classList.toggle('open',state.menu);const backdrop=$('.sidebar-backdrop');if(backdrop)backdrop.hidden=!state.menu;$('.mobile-menu')?.setAttribute('aria-expanded',String(state.menu));},
+ 'account-logout':async()=>{await post('/api/auth/logout');stream?.close();state.bootstrap=null;state.room=null;state.messages=[];state.prefDraft=null;state.creationDraft={};deleteDraft('wd-create');navigate('/');},
  'refresh':()=>refresh(true),
  'invite':()=>{const base=state.bootstrap.public_url||location.origin;const url=`${base}/r/${state.room.code}`;dialog('让伙伴一起加入',`<p class="muted">分享这个链接或房间码。申请加入后，需要房主批准。</p><div class="room-code">${esc(state.room.code)}</div><input class="copy-input" readonly value="${esc(url)}"><img class="qr" src="${roomPath('/invite.svg')}" alt="房间邀请二维码"><div class="actions"><button class="button" data-action="copy-invite">${icon('link',15)} 复制邀请链接</button></div>`);},
  'copy-invite':()=>copy(`${state.bootstrap.public_url||location.origin}/r/${state.room.code}`),
@@ -157,9 +162,19 @@ const handlers={
 async function submit(form) {
  const d=formData(form);
  switch(formId(form)){
+  case 'account-form':{
+   const error=$('[data-account-error]',form);error.hidden=true;
+   try{
+    await post('/api/auth/'+form.dataset.mode,{username:d.username.trim(),password:d.password});
+    state.bootstrap=await api('/api/bootstrap');state.room=null;state.messages=[];state.prefDraft=null;
+    navigate(accountNext(state.authNext));
+   }catch(problem){error.textContent=problem.message;error.hidden=false;}
+   break;
+  }
   case 'join-home':case 'join-direct':{
    let code=formId(form)==='join-home'?d.code.trim():state.code;
    if(code.includes('/r/'))code=code.split('/r/')[1].split(/[?#/]/)[0];
+   if(!state.bootstrap.account){navigate('/login?next='+encodeURIComponent('/r/'+code));break;}
    const room=await post(`/api/join/${encodeURIComponent(code)}`,{username:d.username});navigate(`/r/${room.code}`);break;
   }
   case 'scenario-ai':{
@@ -255,6 +270,7 @@ document.addEventListener('change',event=>{
  if(formId(form)==='fairness-sim')render(true);
 });
 document.addEventListener('toggle',event=>{if(event.target.id==='preference-ai')state.prefAiOpen=event.target.open;},true);
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.menu)handlers.menu();});
 window.addEventListener('popstate',()=>void route());
 window.addEventListener('beforeunload',()=>stream?.close());
 function countdown(){

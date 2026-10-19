@@ -463,3 +463,42 @@ a[href]:after{content:none}
 .pref-track:focus-visible{outline:3px solid #acbf8e;outline-offset:-3px}
 .pref-fields:disabled{opacity:.8}
 @media print{.pref-ai,.pref-progress,.pref-footer{display:none}.pref-track{display:block;height:auto!important;overflow:visible}.pref-step{padding:18px 0;break-inside:avoid}}
+
+/* Account identity and compact layouts share the same responsive work surface. */
+.home-header-actions,.account-controls{display:flex;align-items:center;gap:12px;min-width:0}
+.account-name{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--muted)}
+.account-wrap{max-width:510px;padding:36px 20px 60px;margin:auto}
+.account-wrap>.brand{justify-content:center;margin-bottom:30px}
+.account-wrap .card{padding:30px}
+.account-wrap h1{font-size:27px;margin:8px 0 10px}
+.account-wrap .muted{font-size:13px}
+.account-tabs{display:flex;gap:7px;padding:5px;border-radius:12px;background:var(--sage)}
+.account-tabs a{flex:1;text-align:center;padding:9px;border-radius:9px;color:var(--muted)}
+.account-tabs a.active{background:var(--paper);color:var(--green)}
+.account-legacy{margin-bottom:22px}
+.account-legacy a{display:inline-flex;align-items:center;gap:5px;text-decoration:underline;margin-left:10px}
+.sidebar-backdrop{display:none}
+.stack,.stack>*,.card,.home-bottom>*,.home-hero>*{min-width:0}
+h1,h2,h3,strong{overflow-wrap:anywhere}
+@media(max-width:680px){
+ .home-top{height:auto;min-height:80px;gap:12px;flex-wrap:wrap;padding:16px 0}
+ .home-header-actions{margin-left:auto}.home-top .top-caption{display:none}
+ .account-wrap{padding:24px 16px 40px}.account-wrap .card{padding:22px 18px}
+ .account-name{display:none}.account-controls{gap:2px}
+ .topbar{padding:0 12px;gap:5px}.topbar-right{min-width:0;gap:3px}
+ .topbar-right .button{padding:9px 8px;font-size:11px}
+ .breadcrumbs{min-width:0}.breadcrumbs strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .icon-button{min-width:44px;min-height:44px}
+ .sidebar{width:260px;max-width:85vw;height:100dvh;overflow-y:auto;z-index:80}
+ .sidebar-backdrop:not([hidden]){display:block;position:fixed;inset:0;background:#243b3355;border:0;z-index:70}
+ .room-heading{flex-wrap:wrap}.room-heading>div{min-width:0;max-width:100%}
+ .stepper{overflow-x:auto;max-width:100%;scrollbar-width:thin}.step{flex-shrink:0}
+ .three-columns{grid-template-columns:repeat(3,minmax(0,1fr))}.metric-value{overflow-wrap:anywhere}
+ .field input,.field textarea,.field select{font-size:16px;max-width:100%;min-height:44px}
+ .pref-progress button{min-height:44px}.pref-footer{padding-bottom:calc(17px + env(safe-area-inset-bottom))}
+ .card-title{flex-wrap:wrap}.provider-row,.resource-row{gap:12px;flex-wrap:wrap}
+ .inline-form{align-items:stretch}.inline-form>.field{min-width:0;flex-basis:100%}
+ .form-grid{grid-template-columns:minmax(0,1fr)}
+ dialog{width:calc(100% - 24px);max-height:calc(100dvh - 24px);overflow:auto;margin:12px auto}
+ .chat-messages{overflow-wrap:anywhere}.home-footer{gap:12px;flex-wrap:wrap}
+}

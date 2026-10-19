@@ -49,5 +49,21 @@ class PreferenceTemplateTests(unittest.TestCase):
         self.assertNotIn('>', notes[0]['placeholder'])
 
 
+class AccountTemplateTests(unittest.TestCase):
+    def test_login_and_registration_only_require_username_and_password(self):
+        script = """
+          import * as pages from './web/pages.js';
+          const bootstrap={account:null,has_legacy_rooms:true};
+          console.log(JSON.stringify(['login','register'].map(mode=>pages.accountPage?pages.accountPage(bootstrap,mode,'/new'):'')));
+        """
+        result = subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
+        for html in json.loads(result.stdout):
+            with self.subTest(html=html[:40]):
+                elements=Elements(html)
+                fields=[attrs['name'] for tag,attrs in elements.nodes if tag=='input' and 'name' in attrs]
+                self.assertEqual(fields,['username','password'])
+                self.assertEqual(len([attrs for tag,attrs in elements.nodes if tag=='form' and attrs.get('id')=='account-form']),1)
+
+
 if __name__ == '__main__':
     unittest.main()
