@@ -21,6 +21,17 @@ class ComplexDecisionTests(unittest.TestCase):
         resource=room['resources'][index]
         return engine.evaluate(room,[{'resource':resource,'start':600,'end':645}])
 
+    def test_generic_option_does_not_require_city_or_invent_a_schedule(self):
+        room=self.room({'criteria':[{'name':'可扩展','hard':True}]})
+        room['scenario'].update(city='',date='')
+        option=Resource(id='general',kind='decision',name='可扩展方向',attributes={'可扩展':True},confirmed=True).model_dump()
+        room['resources']=[option]
+        result=engine.generate(room)['proposals'][0]['evaluation']
+        self.assertEqual(result['status'],'FEASIBLE')
+        self.assertIsNone(result['start'])
+        room['members'][0]['preference']['max_duration']=60
+        self.assertEqual(engine.generate(room)['proposals'][0]['evaluation']['status'],'UNKNOWN')
+
     def test_hard_attribute_distinguishes_missing_false_and_true(self):
         room=self.room({'criteria':[{'name':'自助','hard':True}]})
         self.assertEqual(self.evaluate(room)['status'],'UNKNOWN')

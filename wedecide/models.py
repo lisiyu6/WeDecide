@@ -111,6 +111,9 @@ class Preference(Model):
         return self
 
 class Resource(Model):
+    kind: Literal["activity", "decision"] = "activity"
+    description: str = Field(default="", max_length=2000)
+    steps: list[str] = Field(default_factory=list, max_length=10)
     id: str = Field(default="", max_length=64)
     name: str = Field(min_length=1, max_length=100)
     category: str = Field(default="休闲", min_length=1, max_length=60)
@@ -131,7 +134,9 @@ class Resource(Model):
     def coherent(self):
         if any(not key.strip() or len(key) > 80 for key in self.attributes):
             raise ValueError("每个属性名称需要 1–80 字")
-        if self.end - self.start < self.duration:
+        if any(len(step) > 800 for step in self.steps):
+            raise ValueError("方案步骤过长")
+        if self.kind == "activity" and self.end - self.start < self.duration:
             raise ValueError("活动时长超过开放窗口")
         if self.cost is not None and self.cost_upper is not None and self.cost_upper < self.cost:
             raise ValueError("费用上界不能小于估算值")
@@ -207,7 +212,9 @@ class Mutation(Model):
 
 class AIInput(Model):
     text: str = Field(min_length=1, max_length=6000)
-    kind: Literal["chat", "preferences", "scenario", "negotiate"] = "chat"
+    kind: Literal["chat", "preferences", "scenario", "negotiate", "interview", "explain", "agent"] = "chat"
+    draft: Preference | None = None
+    request_id: str = Field(default="", max_length=64)
 
 class AccountCredentials(Model):
     username: str = Field(min_length=1, max_length=30)
@@ -224,3 +231,50 @@ class AccountCredentials(Model):
 
 class Login(Model):
     password: str = Field(min_length=1, max_length=256)
+
+
+class InterviewResult(Model):
+    question: str = Field(default="", max_length=500)
+    left: str = Field(default="", max_length=120)
+    right: str = Field(default="", max_length=120)
+    summary: str = Field(default="", max_length=3000)
+    insights: list[str] = Field(default_factory=list, max_length=10)
+    ready: bool = False
+    draft: Preference
+
+    @model_validator(mode="after")
+    def real_question(self):
+        if not self.ready and (not self.question.strip() or not self.left.strip() or not self.right.strip() or self.left == self.right):
+            raise ValueError("追问须包含问题与两个不同回答")
+        if any(len(item) > 1000 for item in self.insights):
+            raise ValueError("解释过长")
+        return self
+
+
+class ComparisonExplanation(Model):
+    summary: str = Field(min_length=1, max_length=3000)
+    reasons: list[str] = Field(default_factory=list, max_length=10)
+    risks: list[str] = Field(default_factory=list, max_length=10)
+    next_steps: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def bounded_items(self):
+        if any(len(item) > 1500 for item in [*self.reasons, *self.risks, *self.next_steps]):
+            raise ValueError("比较说明过长")
+        return self
+
+
+class DecisionAgentTurn(Model):
+    tool: Literal["analyze", "respond"] = "respond"
+    goal: str = Field(default="", max_length=1000)
+    summary: str = Field(min_length=1, max_length=4000)
+    next_step: str = Field(default="", max_length=1500)
+    questions: list[str] = Field(default_factory=list, max_length=8)
+    resources: list[Resource] = Field(default_factory=list, max_length=10)
+    plans: list[ManualPlan] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def bounded_questions(self):
+        if any(len(question) > 1000 for question in self.questions):
+            raise ValueError("待补信息过长")
+        return self

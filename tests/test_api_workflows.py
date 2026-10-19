@@ -107,7 +107,18 @@ class ProviderFixture(BaseHTTPRequestHandler):
             return self.respond(400, {'error': 'missing model or messages'})
         time.sleep(.15)
         content = '本地接口回归回复'
-        if 'Interview JSON Schema' in body['messages'][0]['content']:
+        if 'Decision Agent JSON Schema' in body['messages'][0]['content']:
+            last=body['messages'][-1]['content']
+            if '提出通用备选' in last:
+                output={'tool':'respond','goal':'比较技术方向','summary':'已提出可供核对的技术备选。','next_step':'房主采纳草稿并核对事实。','resources':[{'id':'agent-option','kind':'decision','name':'开源方案','description':'可自行部署的候选方向','category':'技术方案','cost':None,'attributes':{'可自行部署':True},'source':'测试场景提供的说明','confirmed':False}]}
+            elif 'analyze 工具实际结果' in last:
+                output={'tool':'respond','goal':'形成共同决定','summary':'已调用校核工具，当前结果可以展开比较。','next_step':'房主选择有效方案，再由成员正式投票。'}
+            elif '工具当前不可' in last:
+                output={'tool':'respond','summary':'当前还需成员确认需求或补齐候选。','next_step':'请成员先确认自己的需求表。','questions':['还有哪些需求尚未明确？']}
+            else:
+                output={'tool':'analyze','summary':'先调用校核工具核对已知候选。'}
+            content=json.dumps(output,ensure_ascii=False)
+        elif 'Interview JSON Schema' in body['messages'][0]['content']:
             last=body['messages'][-1]['content']
             ready='整合' in last
             content=json.dumps({'question':'' if ready else '你更希望这次活动带来怎样的体验？', 'left':'' if ready else '轻松聊天', 'right':'' if ready else '探索新体验', 'summary':'根据你的回答，优先考虑轻松交流。', 'ready':ready, 'draft':{'categories':{'休闲':100},'criteria':[{'name':'适合聊天','rating':100}], 'cost_preference':'lower'}, 'insights':['预算具体金额由本人填写']},ensure_ascii=False)
@@ -377,6 +388,53 @@ class ApiWorkflowTests(unittest.TestCase):
         report = host.get(f"/api/rooms/{room['id']}/report")
         self.assertEqual(report.status_code, 200, report.text)
         self.assertEqual(report.json()['result']['outcome'], 'APPROVED')
+
+    def test_agent_calls_evaluation_and_continues_after_confirmed_changes(self):
+        host,room=self.room()
+        room=self.configure(host,room)
+        room=self.action(host,room,'preference',preference_version=0,preference={'budget_target':100})
+        path=f"/api/rooms/{room['id']}"
+        response=host.post(path+'/ai',json={'kind':'agent','text':'请自主推进本次决策'})
+        self.assertEqual(response.status_code,202,response.text)
+        answer=self.replies(host,room)[0]
+        self.assertNotIn('_prepared_analysis',answer['metadata'])
+        current=host.get(path).json()
+        self.assertTrue(current['proposals'])
+        self.assertEqual(current['analysis_version'],1)
+        self.assertIn('调用校核',current['agent']['summary'])
+        changed=self.action(host,current,'preference',preference_version=1,preference={'budget_target':70})
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            updated=host.get(path).json()
+            if updated['analysis_version']>=2 and not updated['agent_pending']:break
+            time.sleep(.03)
+        self.assertGreaterEqual(updated['analysis_version'],2)
+        self.assertEqual(updated['agent']['input_version'],updated['input_version'])
+
+    def test_agent_general_option_is_draft_until_adopted_and_reviewed(self):
+        host,room=self.room(scenario={'title':'选技术方向'},demo=False)
+        room=self.configure(host,room)
+        path=f"/api/rooms/{room['id']}"
+        response=host.post(path+'/ai',json={'kind':'agent','text':'请提出通用备选'})
+        self.assertEqual(response.status_code,202,response.text)
+        self.replies(host,room)
+        current=host.get(path).json()
+        self.assertFalse(current['resources'])
+        adopted=self.action(host,current,'agent_draft')
+        self.assertEqual(adopted['resources'][0]['kind'],'decision')
+        self.assertFalse(adopted['resources'][0]['confirmed'])
+        adopted=self.action(host,adopted,'agent_toggle',enabled=False)
+        resources=adopted['resources'];resources[0]['confirmed']=True
+        reviewed=self.action(host,adopted,'resources',resources=resources)
+        confirmed=self.action(host,reviewed,'preference',preference_version=0,preference={'criteria':[{'name':'可自行部署','hard':True}]})
+        analyzed=self.action(host,confirmed,'analyze')
+        candidate=analyzed['proposals'][0]
+        self.assertEqual(candidate['evaluation']['status'],'FEASIBLE')
+        self.assertIsNone(candidate['evaluation']['start'])
+        selected=self.action(host,analyzed,'select',proposal_id=candidate['id'])
+        voting=self.action(host,selected,'start_vote')
+        done=self.action(host,voting,'vote',session_id=voting['vote']['id'],choice='accept')
+        self.assertEqual(done['state'],'APPROVED')
 
     def test_ai_interview_generates_question_and_draft_without_confirming_member(self):
         host, guest, room = self.pair()

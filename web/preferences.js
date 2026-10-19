@@ -1,141 +1,64 @@
 import {$,$$,setText,esc,icon,field,textarea,select,check,time,money,minutes,number,terminal} from './common.js';
-
-const STEPS=['预算','时间','活动偏好','待确认问题','预览确认'];
 const split=value=>String(value||'').split(/[,，\n]/).map(v=>v.trim()).filter(Boolean);
 const lines=value=>String(value||'').split('\n').map(v=>v.trim()).filter(Boolean);
 const importance=[['1','不太在意'],['2','略微在意'],['3','一般'],['4','比较在意'],['5','非常在意']];
-function endTimes(value,optional=false){
-  const values=new Set(Array.from({length:48},(_,i)=>time((i+1)*30)));
-  if(value!=null)values.add(time(value));
-  return [...(optional?[['','暂不设置']]:[]),...[...values].sort().map(v=>[v,v])];
-}
-function endTimeField(label,name,value,optional=false){
-  return field(label,name,value==null?'':time(value),'text',`list="${name}-choices" maxlength="5" placeholder="${optional?'可留空，':''}例如 18:45 或 24:00"`)+`<datalist id="${name}-choices">${endTimes(value).map(([v])=>`<option value="${v}"></option>`).join('')}</datalist>`;
-}
+const ratings=[['','尚未评价'],['100','喜欢 / 希望具备'],['50','都可以'],['0','不喜欢 / 希望不具备']];
 const readTime=value=>/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(value)?minutes(value):value==='24:00'?1440:null;
-function questionCards(questions){
-  return questions.length?questions.map((text,i)=>`<article class="pref-question"><div class="between"><strong>需要你核对 · ${i+1}</strong><span class="badge warm">待确认</span></div><p>${esc(text)}</p><div class="actions"><button type="button" class="button secondary small" data-pref-resolve="${i}">已核对，按我填写的条件处理</button><button type="button" class="button ghost small" data-pref-note="${i}">只作补充，不设为限制</button></div></article>`).join(''):'<div class="notice">没有尚未处理的问题。下面的补充说明不会阻止你确认需求。</div>';
+const parse=(value,fallback)=>{try{return JSON.parse(value||'');}catch{return fallback;}};
+export function latestInterview(state){return [...state.messages].reverse().find(row=>row.role==='assistant'&&row.kind==='interview'&&row.metadata.interview&&row.metadata.preference_version===state.room.me.preference_version);}
+export function interviewDraft(state){return state.prefDraft?.preference||latestInterview(state)?.metadata.draft||state.room.me.preference||{};}
+function interviewCard(state,locked){
+ const turn=latestInterview(state),q=turn?.metadata.interview,pending=state.room.ai_pending;
+ const error=[...state.messages].reverse().find(row=>row.role==='assistant'&&row.kind==='interview');
+ return `<section class="card interview-panel"><div class="card-title"><div><h2>先聊喜好，让 AI 帮你整理</h2><p class="hint">问题由房间当前配置的 AI 根据场景与回答生成。你的访谈只对你可见。</p></div>${pending?'<span class="badge">AI 正在思考</span>':''}</div>${error?.metadata.error?`<div class="notice warm">${esc(error.content)}</div>`:''}${q?`<div class="interview-recap"><strong>AI 目前理解为</strong><p>${esc(q.summary||'正在了解你的想法')}</p>${q.insights?.length?`<ul>${q.insights.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:''}</div>`:''}${q&&!q.ready?`<div class="interview-deck"><article class="interview-question" data-interview-card><span class="interview-stamp" data-interview-stamp aria-hidden="true"></span><span class="eyebrow">AI 根据你的回答继续提问</span><h2>${esc(q.question)}</h2><div class="interview-choices"><button type="button" class="button secondary" data-action="interview-answer" data-choice="left" ${locked||pending?'disabled':''}>← ${esc(q.left)}</button><button type="button" class="button" data-action="interview-answer" data-choice="right" ${locked||pending?'disabled':''}>${esc(q.right)} →</button></div></article></div><div class="actions"><button type="button" class="button ghost small" data-action="interview-answer" data-choice="skip" ${locked||pending?'disabled':''}>这项暂未确定</button><button type="button" class="button secondary small" data-action="interview-summary" ${locked||pending?'disabled':''}>先把当前回答整理成表格</button></div>`:q?.ready?'<div class="notice">AI 已整合出需求表草稿。请在下方核对、编辑，再由你确认。</div>':'<p class="muted">说说这次你希望怎样安排，AI 会自己判断该了解哪些喜好、哪些地方需要追问。也可直接点击开始。</p>'}<form id="interview-form" class="stack" style="margin-top:18px">${textarea(q&&!q.ready?'也可以自由回答或补充':'先说一点你的想法（可留空）','text',state.interviewRaw||'','rows="2" maxlength="6000" placeholder="用自己的话描述，复杂要求也可以直接说。"')}<div class="actions"><button type="submit" class="button" ${locked||pending?'disabled':''}>${pending?'AI 正在处理…':q?'发送给 AI，继续整理':'让 AI 开始了解我的喜好'}</button>${turn?`<button type="button" class="button secondary" data-action="apply-draft" data-id="${turn.id}" ${locked||pending?'disabled':''}>用这份 AI 草稿填入表格</button>`:''}<button type="button" class="button ghost" data-pref-table>直接编辑需求表</button></div></form></section>`;
 }
-function page(index,title,description,content){
-  return `<section class="pref-step" data-pref-page="${index}" aria-label="第 ${index+1} 步：${STEPS[index]}"><div class="pref-step-heading"><span class="eyebrow">STEP ${String(index+1).padStart(2,'0')}</span><h2>${title}</h2><p>${description}</p></div>${content}</section>`;
-}
+const tableRow=(name,content,basis)=>`<tr><th scope="row">${name}</th><td data-label="你的需求">${content}</td><td class="hint" data-label="如何计入">${basis}</td></tr>`;
+function criterionRows(criteria){return criteria.map((c,i)=>`<tr data-criterion-row="${i}"><th scope="row"><input aria-label="具体要求名称 ${i+1}" name="criterion:${i}:name" data-criterion-field="name" value="${esc(c.name)}" maxlength="80" placeholder="由 AI 整理或自行命名"></th><td data-label="态度与用途"><div class="criteria-controls">${select('态度',`criterion:${i}:rating`,String(c.rating??100),ratings.slice(1),'data-criterion-field="rating"')}${select('用途',`criterion:${i}:hard`,c.hard?'hard':'soft',[['soft','偏好'],['hard','必要条件']],'data-criterion-field="hard"')}${select('适用范围',`criterion:${i}:scope`,c.scope||'any',[['any','至少一项活动满足'],['all','每项活动均满足']],'data-criterion-field="scope"')}${select('重要程度',`criterion:${i}:weight`,String(c.weight??3),importance,'data-criterion-field="weight"')}</div></td><td data-label="依据"><p class="hint">与房主填写的同名活动属性核对。缺少属性表示未知，不假装满足。</p><button type="button" class="button ghost small" data-pref-remove-criterion="${i}">移除这条</button></td></tr>`).join('');}
 export function preferenceEditor(state){
-  const r=state.room,locked=terminal.has(r.state)||r.state==='VOTING',saving=state.savingPreferences?.has(r.id)||false;
-  const draft=!locked&&state.prefDraft,p=draft?.preference||r.me.preference||{};
-  const categories=[...new Set(['户外','文化','室内','美食','运动','休闲',...r.resources.map(x=>x.category),...Object.keys(p.categories||{})])];
-  const questions=p.unresolved||[],unlimited=(p.available_start??0)===0&&(p.available_end??1440)===1440;
-  const step=Math.max(0,Math.min(4,state.prefStep||0));
-  return `<div class="card pref-editor"><div class="card-title"><div><h2>慢慢填，一步一步就好</h2><p class="hint">左右滑动卡片，或点击步骤与下方按钮。填写内容会保留在当前浏览器。</p></div><span data-pref-badge class="badge ${!draft&&r.me.confirmed?'good':''}">${draft?'草稿 · 待你确认':r.me.confirmed?'已确认 V'+r.me.preference_version:'尚未确认'}</span></div>
-  ${locked?'<div class="notice warm">投票期间或决策结束后，个人条件已锁定；仍可翻看各张卡片。</div>':''}
-  <form id="preference-form" data-preference-editor novalidate data-pref-step="${step}" data-locked="${locked}" data-saving="${saving}">
-    <nav class="pref-progress" aria-label="填写步骤">${STEPS.map((label,i)=>`<button type="button" data-pref-go="${i}" class="${i===step?'active':''}" ${i===step?'aria-current="step"':''}><span>${i+1}</span>${label}${i===3?'<b data-pref-pending></b>':''}</button>`).join('')}</nav>
-    <fieldset class="pref-fields" ${locked||saving?'disabled':''}>
-      <textarea name="unresolved" hidden>${esc(questions.join('\n'))}</textarea>
-      <div class="pref-track" data-pref-track tabindex="0" role="region" aria-label="个人需求填写卡片，可用左右方向键翻页">
-        ${page(0,'这次，花多少比较舒服？','预算上限是必须遵守的条件；理想预算只是偏好，留空也可以确认。',`<div class="form-grid pref-large-fields">${field('最多能花多少 / 人','budget_max',p.budget_max??'','number','min="0" max="1000000" step="0.01" placeholder="留空表示暂不设上限"')}${field('希望控制在多少 / 人','budget_target',p.budget_target??'','number','min="0" max="1000000" step="0.01" placeholder="可选，填一个更舒服的金额"')}</div><div class="pref-quick"><span class="hint">快速设置理想预算</span>${[50,100,150,200,300,500].map(v=>`<button type="button" data-pref-budget="${v}">${v} 元</button>`).join('')}</div><div class="notice" style="margin-top:24px">例如上限 500 元、理想 150 元：超过 500 的方案直接排除，150 元以内会更符合你的预算偏好。</div><div class="pref-compact">${select('低预算对你有多重要？','budget_weight',String(p.budget_weight??3),importance)}</div>`)}
-        ${page(1,'什么时候，方便一起出发？','没有时间限制可以直接选择“时间不限”，不必手动填写 00:00 到 24:00。',`${check('时间不限，按当天活动安排','time_unlimited',unlimited)}<div class="form-grid pref-large-fields" style="margin-top:20px">${field('最早可以参加','available_start',time(p.available_start??540),'time','step="60"')}${endTimeField('最晚需要结束','available_end',p.available_end??1260)}</div><div class="pref-compact">${field('最多能玩多久 / 分钟（含转场和等待）','max_duration',p.max_duration??'','number','min="15" max="1440" step="1" placeholder="可留空，例如 90 分钟"')}</div><details class="advanced"><summary>我还有希望尽量满足的时间偏好（可选）</summary><div class="form-grid">${field('希望尽量晚于这个时间开始','preferred_start',p.preferred_start==null?'':time(p.preferred_start),'time','step="60"')}${endTimeField('希望尽量早于这个时间结束','preferred_end',p.preferred_end,true)}${select('时间偏好有多重要？','time_weight',String(p.time_weight??3),importance)}</div></details>`)}
-        ${page(2,'哪些活动，会让你更期待？','点选你的态度，不感兴趣的类别也可以保持“未评价”。明确不能参加的类别放在下方必要限制里。',`<div class="pref-category-grid">${categories.map(c=>`<div class="pref-category" data-category="${esc(c)}"><strong>${esc(c)}</strong><input type="hidden" name="category:${esc(c)}" value="${p.categories?.[c]??''}"><div>${[['','未评价'],['100','喜欢'],['50','一般'],['0','不喜欢']].map(([value,label])=>`<button type="button" data-pref-category="${esc(c)}" data-value="${value}" aria-pressed="${String(p.categories?.[c]??'')===value}">${label}</button>`).join('')}</div></div>`).join('')}</div><div class="pref-compact">${select('活动类型对你有多重要？','activity_weight',String(p.activity_weight??3),importance)}</div><div style="margin-top:22px">${textarea('还有什么想说的？','other',p.other||'','rows="3" maxlength="2000" placeholder="例如：想吃自助，希望环境安静、适合慢慢聊天。"')}</div><details class="advanced"><summary>必须避开的活动或必须去的地点（可选）</summary><div class="form-grid">${field('明确不能参加的活动类别','excluded_categories',(p.excluded_categories||[]).join('，'),'text','placeholder="例如 运动，户外；逗号分隔"')}${field('允许的地点名称','allowed_locations',(p.allowed_locations||[]).join('，'),'text','placeholder="留空不限制；多个名称用逗号分隔"')}</div><p class="hint">地点限制按候选活动中填写的地点名称匹配；没有这个必要条件时请留空。</p></details>`)}
-        ${page(3,'把不确定的地方，说清楚就好。','逐条核对 AI 的提问。已经通过填写解决的问题，可标记已处理；只是建议或候选资料不足，可保留为补充说明。',`<div class="pref-questions" data-pref-questions>${questionCards(questions)}</div><div class="form-section">${textarea('补充说明与建议（不会阻止确认）','notes',(p.notes||[]).join('\n'),'rows="3" maxlength="10000" placeholder="一行一条。候选资源待补充、理想预算未设置等，可记在这里。"')}<p class="hint">缺少理想预算、没有选择某类偏好、候选活动需要补充，都不等于你的个人硬约束尚未确认。</p></div>`)}
-        ${page(4,'最后看一眼，这些是你的想法。','只有你点击确认，下面的条件才会成为正式决策依据。AI 草稿不会自动生效。',`<div class="pref-review" data-pref-review></div><div class="notice" style="margin-top:20px">没有设置的可选项不会被强行补成限制。候选活动的费用、地点与日期是否完整，由房间方案分析另外检查。</div>`)}
-      </div>
-    </fieldset>
-    <div class="pref-footer"><div class="pref-validation" data-pref-validation role="status" aria-live="polite"></div><div class="between"><span class="hint" data-pref-position aria-live="polite">${step+1} / 5 · ${STEPS[step]}</span><div class="actions"><button type="button" class="button secondary" data-pref-back>上一步</button><button type="button" class="button" data-pref-next>下一步 ${icon('arrow',15)}</button><button type="submit" class="button" data-pref-confirm hidden>${saving?'<span class="spinner"></span> 正在保存':icon('check',16)+' 由我确认这些条件'}</button></div></div></div>
-  </form></div>`;
+ const r=state.room,locked=terminal.has(r.state)||r.state==='VOTING',saving=state.savingPreferences?.has(r.id)||false;
+ const turn=latestInterview(state),p=locked?r.me.preference||{}:interviewDraft(state),draft=Boolean(state.prefDraft||turn),criteria=p.criteria||[];
+ const categories=[...new Set([...r.resources.map(x=>x.category),...Object.keys(p.categories||{})])];
+ const stage=locked||state.prefStep>0||(!state.prefDraft&&turn?.metadata.interview.ready)||(!draft&&r.me.confirmed)?1:0;
+ const unlimited=(p.available_start??0)===0&&(p.available_end??1440)===1440;
+ return `<div class="stack pref-editor"><div data-interview-panel ${stage?'hidden':''}>${interviewCard(state,locked)}</div><section class="card"><div class="card-title"><div><h2>我的需求表</h2><p class="hint">先由 AI 了解喜好、整合答案，再在这里核对和补充。只有确认后才计入正式方案。</p></div><span data-pref-badge class="badge ${r.me.confirmed&&!draft?'good':''}">${draft?'草稿 · 待你确认':r.me.confirmed?'已确认 V'+r.me.preference_version:'尚未确认'}</span></div><div class="actions"><button type="button" class="button secondary" data-pref-interview ${locked?'disabled':''}>继续让 AI 了解我</button><button type="button" class="button secondary" data-pref-table>展开需求表</button></div><form id="preference-form" data-preference-editor data-pref-step="${stage}" data-locked="${locked}" data-saving="${saving}" novalidate><div data-pref-table-panel ${stage?'':'hidden'}><fieldset class="pref-fields" ${locked||saving?'disabled':''}><textarea name="criteria_json" hidden>${esc(JSON.stringify(criteria))}</textarea><textarea name="discovery_json" hidden>${esc(JSON.stringify(p.discovery||{}))}</textarea><table class="needs-table"><thead><tr><th>项目</th><th>你的需求（可修改）</th><th>如何计入</th></tr></thead><tbody>${tableRow('原话与其他想法',textarea('原话与其他想法','other',p.other||'','rows="3" maxlength="2000" placeholder="原话会保留，可让 AI 继续理解。"'),'AI 用于理解和解释；没有核对依据的主观要求不会伪装成已量化评分。')}${tableRow('费用偏好',select('费用倾向','cost_preference',p.cost_preference||'neutral',[['neutral','暂不偏向低价'],['lower','相对更便宜更好']])+field('理想人均 / 元','budget_target',p.budget_target??'','number','min="0" max="1000000" step="0.01" placeholder="可留空"')+select('费用重要程度','budget_weight',String(p.budget_weight??3),importance),'更便宜的倾向即使没有具体金额也会参与比较；理想金额由你核对。')}${tableRow('人均费用上限',field('人均费用上限 / 元','budget_max',p.budget_max??'','number','min="0" max="1000000" step="0.01" placeholder="留空不设上限"'),'本人确认的必要条件，按费用上界检查。')}${tableRow('可参加时间',check('当天时间不限','time_unlimited',unlimited)+field('最早能参加','available_start',time(p.available_start??0),'time','step="60"')+field('最晚需结束','available_end',time(p.available_end??1440),'text','placeholder="例如 18:45，支持 24:00"')+field('最长总时长 / 分钟','max_duration',p.max_duration??'','number','min="15" max="1440" placeholder="可留空，含等待和转场"'),'确认后检查行程是否在时间窗口内。')}${tableRow('希望的时间',field('希望开始不早于','preferred_start',p.preferred_start==null?'':time(p.preferred_start),'time')+field('希望结束不晚于','preferred_end',p.preferred_end==null?'':time(p.preferred_end),'text','placeholder="可留空，支持 24:00"')+select('时间偏好重要程度','time_weight',String(p.time_weight??3),importance),'作为偏好评分，不自动设为必要条件。')}${categories.map(c=>tableRow(esc(c),select(`${c}偏好`,`category:${c}`,String(p.categories?.[c]??''),ratings),'按活动时长计算类别偏好。喜欢不等于必须，不喜欢不等于禁止。')).join('')}${tableRow('活动类型权重',select('活动类型重要程度','activity_weight',String(p.activity_weight??3),importance),'用于你自己的类别评分。')}${tableRow('必要限制',field('明确排除的类别','excluded_categories',(p.excluded_categories||[]).join('，'),'text','placeholder="逗号分隔，可留空"')+field('允许地点名称','allowed_locations',(p.allowed_locations||[]).join('，'),'text','placeholder="按候选活动地点精确匹配，可留空"'),'只有本人明确填写才会限制方案。')}</tbody></table><h3 style="margin-top:24px">AI 整理的具体要求 / 自定义要求</h3><p class="hint">要求名称可以由 AI 根据情境生成。房主在候选活动填写相应属性后，才能核对；必要条件缺依据时标为待核实。</p><table class="needs-table"><thead><tr><th>要求</th><th>态度与用途</th><th>依据</th></tr></thead><tbody data-pref-criteria>${criterionRows(criteria)}</tbody></table><button type="button" class="button secondary small" data-pref-add-criterion>添加一条具体要求</button><div class="form-section"><h3>仍需要你澄清的问题</h3><textarea name="unresolved" hidden>${esc((p.unresolved||[]).join('\n'))}</textarea><div data-pref-questions>${(p.unresolved||[]).map((text,i)=>`<article class="pref-question"><p>${esc(text)}</p><div class="actions"><button type="button" class="button secondary small" data-pref-resolve="${i}">我已通过表格明确</button><button type="button" class="button ghost small" data-pref-note="${i}">只作说明，不设限制</button></div></article>`).join('')||'<p class="hint">没有阻止确认的待澄清问题。</p>'}</div>${textarea('补充说明（不阻止确认）','notes',(p.notes||[]).join('\n'),'rows="3" maxlength="10000" placeholder="一行一条；无法量化的要求可以保留，交给 AI 结合方案解释。"')}</div><div data-pref-review class="notice"></div></fieldset><div class="pref-footer"><p data-pref-validation role="status" aria-live="polite"></p><button type="submit" class="button" data-pref-confirm ${locked||saving?'disabled':''}>${saving?'正在保存…':'由我确认，计入正式方案'}</button></div></div></form></section></div>`;
 }
 export function readPreference(form){
-  // FormData skips disabled controls; locked records must remain readable in the preview.
-  const d=Object.fromEntries([...form.elements].filter(el=>el.name&&!['submit','button'].includes(el.type)).map(el=>[el.name,el.value])),categories={};
-  for(const [key,value] of Object.entries(d))if(key.startsWith('category:')&&value!=='')categories[key.slice(9)]=Number(value);
-  const unlimited=form.elements.time_unlimited.checked;
-  return {budget_max:number(d.budget_max),budget_target:number(d.budget_target),budget_weight:number(d.budget_weight??3),available_start:unlimited?0:readTime(d.available_start),available_end:unlimited?1440:readTime(d.available_end),max_duration:number(d.max_duration),preferred_start:readTime(d.preferred_start),preferred_end:readTime(d.preferred_end),time_weight:number(d.time_weight??3),categories,activity_weight:number(d.activity_weight??3),excluded_categories:split(d.excluded_categories),allowed_locations:split(d.allowed_locations),other:d.other||'',unresolved:lines(d.unresolved),notes:lines(d.notes)};
+ const d=Object.fromEntries([...form.elements].filter(el=>el.name&&!['submit','button'].includes(el.type)).map(el=>[el.name,el.value])),categories={};
+ for(const [key,value] of Object.entries(d))if(key.startsWith('category:')&&value!=='')categories[key.slice(9)]=Number(value);
+ const unlimited=form.elements.time_unlimited.checked;
+ return {budget_max:number(d.budget_max),budget_target:number(d.budget_target),budget_weight:number(d.budget_weight??3),cost_preference:d.cost_preference||'neutral',available_start:unlimited?0:readTime(d.available_start),available_end:unlimited?1440:readTime(d.available_end),max_duration:number(d.max_duration),preferred_start:readTime(d.preferred_start),preferred_end:readTime(d.preferred_end),time_weight:number(d.time_weight??3),categories,activity_weight:number(d.activity_weight??3),criteria:parse(d.criteria_json,[]),discovery:parse(d.discovery_json,{}),excluded_categories:split(d.excluded_categories),allowed_locations:split(d.allowed_locations),other:d.other||'',unresolved:lines(d.unresolved),notes:lines(d.notes)};
 }
 export function updatePreferenceFeedback(form){
-  if(!form)return {ready:false,pending:0,errors:[]};
-  const p=readPreference(form),errors=[],locked=form.dataset.locked==='true',saving=form.dataset.saving==='true';
-  for(const key of ['budget_max','budget_target']){
-    const input=form.elements[key];
-    if(input.validity.badInput||input.validity.stepMismatch||(p[key]!=null&&(!Number.isFinite(p[key])||p[key]<0||p[key]>1000000)))errors.push({step:0,text:'预算请填写 0–1,000,000 之间的金额，最多保留两位小数。'});
-  }
-  if(!form.elements.time_unlimited.checked&&(p.available_start==null||p.available_end==null||p.available_end<=p.available_start))errors.push({step:1,text:'请选择有效的时间段，结束时间需要晚于开始时间。'});
-  if((form.elements.preferred_start.value&&p.preferred_start==null)||(form.elements.preferred_end.value&&p.preferred_end==null))errors.push({step:1,text:'希望的时间请按 HH:MM 填写，例如 18:45；结束时间支持 24:00。'});
-  if(form.elements.max_duration.validity.badInput||(p.max_duration!=null&&(!Number.isInteger(p.max_duration)||p.max_duration<15||p.max_duration>1440)))errors.push({step:1,text:'最长总时长可留空，或填写 15–1,440 分钟之间的整数。'});
-  if(p.preferred_start!=null&&p.preferred_end!=null&&p.preferred_end<=p.preferred_start)errors.push({step:1,text:'希望的结束时间需要晚于希望的开始时间。'});
-  if(Object.keys(p.categories).length>30||p.excluded_categories.length>30||p.allowed_locations.length>30||[...Object.keys(p.categories),...p.excluded_categories,...p.allowed_locations].some(v=>v.length>80))errors.push({step:2,text:'活动偏好、排除类别和地点各最多 30 项，每项不超过 80 字。'});
-  if(p.other.length>2000)errors.push({step:2,text:'其他想法请控制在 2,000 字以内。'});
-  if(p.notes.length>20||p.notes.some(v=>v.length>500))errors.push({step:3,text:'补充说明最多 20 条，每条不超过 500 字。'});
-  const pending=p.unresolved.length,ready=!locked&&!saving&&!pending&&!errors.length;
-  const status=setText('[data-pref-validation]',saving?'正在保存这次确认，请稍候。':locked?'这些是已锁定的个人条件，可以翻页查看。':pending?`还有 ${pending} 项待核对，请在“待确认问题”卡片中逐条处理。`:errors[0]?.text||'内容会保留；最后一步由你确认生效。',form);
-  status?.classList.toggle('pref-invalid',!locked&&Boolean(pending||errors.length));
-  $('[data-pref-confirm]',form).disabled=!ready;
-  setText('[data-pref-pending]',pending?String(pending):'',form);
-  const weight=value=>importance.find(([v])=>v===String(value))?.[1]||'一般';
-  const categories=Object.entries(p.categories).map(([c,v])=>`${v===100?'喜欢':v===50?'一般':'不喜欢'}：${c}`).join('；')||'尚未评价，保留选择空间';
-  const preferred=[p.preferred_start==null?'':`希望 ${time(p.preferred_start)} 之后开始`,p.preferred_end==null?'':`希望 ${time(p.preferred_end)} 之前结束`].filter(Boolean).join('；');
-  const rows=[['必须遵守的预算上限',p.budget_max==null?'暂不设上限':money(p.budget_max)+' / 人'],['希望的理想预算',p.budget_target==null?'暂不设置，不影响确认':`${money(p.budget_target)} / 人 · ${weight(p.budget_weight)}`],['可参加时间',p.available_start===0&&p.available_end===1440?'当天时间不限':`${time(p.available_start)} – ${time(p.available_end)}`],['最长总时长',p.max_duration==null?'暂不限制':`${p.max_duration} 分钟`],['希望的时间偏好',preferred?`${preferred} · ${weight(p.time_weight)}`:'暂不设置'],['活动偏好',categories+(Object.keys(p.categories).length?` · ${weight(p.activity_weight)}`:'')],['明确排除的类别',p.excluded_categories.join('、')||'暂不设置'],['地点限制',p.allowed_locations.join('、')||'暂不设置'],['其他想法',p.other||'无'],['补充说明（不作为限制）',p.notes.join('\n')||'无'],['待核对问题',pending?`${pending} 项尚未处理`:'已处理完毕']];
-  $('[data-pref-review]',form).innerHTML=rows.map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('');
-  return {ready,pending,errors};
+ if(!form)return {ready:false,pending:0,errors:[]};
+ const p=readPreference(form),errors=[],locked=form.dataset.locked==='true',saving=form.dataset.saving==='true';
+ const fail=text=>errors.push({step:1,text});
+ for(const key of ['budget_max','budget_target'])if(!form.elements[key].checkValidity()||(p[key]!=null&&(!Number.isFinite(p[key])||p[key]<0||p[key]>1000000)))fail('金额请填写 0–1,000,000，最多两位小数。');
+ if(p.available_start==null||p.available_end==null||p.available_end<=p.available_start)fail('参加时间需要有效，结束晚于开始；结束支持 24:00。');
+ if((form.elements.preferred_start.value&&p.preferred_start==null)||(form.elements.preferred_end.value&&p.preferred_end==null))fail('希望的时间请按 HH:MM 填写。');
+ if(p.preferred_start!=null&&p.preferred_end!=null&&p.preferred_end<=p.preferred_start)fail('希望的结束时间应晚于希望的开始时间。');
+ if(!form.elements.max_duration.checkValidity()||(p.max_duration!=null&&(!Number.isInteger(p.max_duration)||p.max_duration<15||p.max_duration>1440)))fail('最长时长可留空，或填写 15–1440 分钟整数。');
+ if(p.criteria.length>12||p.criteria.some(c=>!c.name.trim()||c.name.length>80||(c.hard&&c.rating===50))||new Set(p.criteria.map(c=>c.name.trim().toLowerCase())).size!==p.criteria.length)fail('具体要求最多 12 条，名称不可重复或为空；“都可以”不能设为必要条件。');
+ if(Object.keys(p.categories).length>30||p.excluded_categories.length>30||p.allowed_locations.length>30||[...Object.keys(p.categories),...p.excluded_categories,...p.allowed_locations].some(v=>v.length>80))fail('类别与地点各最多 30 项，每项最多 80 字。');
+ if(p.notes.length>20||p.notes.some(v=>v.length>500)||p.other.length>2000)fail('补充说明最多 20 条、每条 500 字；原话最多 2000 字。');
+ const pending=p.unresolved.length,ready=!locked&&!saving&&!pending&&!errors.length;
+ setText('[data-pref-validation]',locked?'正式条件已锁定，可阅读。':saving?'正在保存…':pending?`还有 ${pending} 项待澄清，请继续问 AI 或在表格中明确。`:errors[0]?.text||'核对后由你确认，AI 草稿不会自动改变正式需求。',form);
+ const button=$('[data-pref-confirm]',form);if(button)button.disabled=!ready;
+ setText('[data-pref-review]',`当前整理：${Object.keys(p.categories).length} 项类别偏好、${p.criteria.length} 项具体要求；预算上限 ${p.budget_max==null?'未设置':money(p.budget_max)}。${p.cost_preference==='lower'?'已选择相对低价偏好。':''}`,form);
+ return {ready,pending,errors};
 }
-let cleanup=null,activeForm=null,changeStep=null;
-export function goToPreferenceStep(step){
-  if(!activeForm)return;
-  const track=$('[data-pref-track]',activeForm),index=Math.max(0,Math.min(4,step));
-  track.scrollTo({left:index*track.clientWidth,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
-  changeStep?.(index);
-}
+let cleanup=null,activeRoot=null,changeStage=null;
+export function goToPreferenceStep(step){changeStage?.(step>0?1:0);}
 export function mountPreferenceEditor(root,onStep){
-  cleanup?.();cleanup=null;activeForm=null;changeStep=null;
-  const form=root?.querySelector('form[data-preference-editor]');
-  if(!form)return;
-  const track=$('[data-pref-track]',form),pages=$$('[data-pref-page]',form);
-  // Mount only the complete card editor, never another room page or a stale form.
-  const complete=['validation','confirm','position','back','next','review','questions'].every(name=>$(`[data-pref-${name}]`,form));
-  if(!track||pages.length!==STEPS.length||!complete)return;
-  activeForm=form;
-  let timer=null,current=Number(form.dataset.prefStep||0),observer=null,previousWidth=track.clientWidth;
-  const resize=()=>{const width=track.clientWidth;if(width!==previousWidth){previousWidth=width;track.scrollLeft=current*width;}track.style.height=Math.max(280,Math.ceil(pages[current].scrollHeight))+'px';};
-  changeStep=index=>{
-    current=index;form.dataset.prefStep=String(index);onStep(index);
-    for(const page of pages){const inactive=Number(page.dataset.prefPage)!==index;page.inert=inactive;page.setAttribute('aria-hidden',String(inactive));}
-    for(const button of $$('[data-pref-go]',form)){const selected=Number(button.dataset.prefGo)===index;button.classList.toggle('active',selected);if(selected)button.setAttribute('aria-current','step');else button.removeAttribute('aria-current');}
-    $('[data-pref-back]',form).disabled=index===0;
-    $('[data-pref-next]',form).hidden=index===4;
-    $('[data-pref-confirm]',form).hidden=index!==4;
-    setText('[data-pref-position]',`${index+1} / 5 · ${STEPS[index]}`,form);
-    resize();
-  };
-  const persist=()=>form.elements.unresolved.dispatchEvent(new Event('input',{bubbles:true}));
-  form.addEventListener('click',event=>{
-    const button=event.target.closest('button');if(!button||button.disabled)return;
-    if(button.closest('fieldset:disabled'))return;
-    if(button.hasAttribute('data-pref-go'))goToPreferenceStep(Number(button.dataset.prefGo));
-    else if(button.hasAttribute('data-pref-back'))goToPreferenceStep(current-1);
-    else if(button.hasAttribute('data-pref-next'))goToPreferenceStep(current+1);
-    else if(button.hasAttribute('data-pref-budget')){form.elements.budget_target.value=button.dataset.prefBudget;persist();}
-    else if(button.hasAttribute('data-pref-category')){
-      form.elements.namedItem('category:'+button.dataset.prefCategory).value=button.dataset.value;
-      for(const option of $$('button',button.closest('[data-category]')))option.setAttribute('aria-pressed',String(option===button));
-      persist();
-    }else if(button.hasAttribute('data-pref-resolve')||button.hasAttribute('data-pref-note')){
-      const questions=lines(form.elements.unresolved.value),index=Number(button.dataset.prefResolve??button.dataset.prefNote),[question]=questions.splice(index,1);
-      if(question&&button.hasAttribute('data-pref-note'))form.elements.notes.value=[...new Set([...lines(form.elements.notes.value),question])].join('\n');
-      form.elements.unresolved.value=questions.join('\n');
-      $('[data-pref-questions]',form).innerHTML=questionCards(questions);persist();resize();
-    }
-  });
-  const update=()=>{const disabled=form.elements.time_unlimited.checked||form.dataset.locked==='true'||form.dataset.saving==='true';form.elements.available_start.disabled=disabled;form.elements.available_end.disabled=disabled;updatePreferenceFeedback(form);resize();};
-  form.addEventListener('input',update);
-  form.addEventListener('change',event=>{
-    if(event.target.name==='time_unlimited'&&!event.target.checked&&form.elements.available_start.value==='00:00'&&form.elements.available_end.value==='24:00'){form.elements.available_start.value='09:00';form.elements.available_end.value='21:00';persist();}
-    update();
-  });
-  form.addEventListener('keydown',event=>{
-    if(event.key==='Enter'&&!event.isComposing&&current<4&&event.target.matches('input:not([type=checkbox])')){event.preventDefault();goToPreferenceStep(current+1);return;}
-    if(!['ArrowLeft','ArrowRight'].includes(event.key)||(event.target!==track&&!event.target.closest('[data-pref-go]')))return;
-    event.preventDefault();goToPreferenceStep(current+(event.key==='ArrowRight'?1:-1));
-    if(event.target!==track)$(`[data-pref-go="${current}"]`,form).focus({preventScroll:true});
-  });
-  track.addEventListener('scroll',()=>{clearTimeout(timer);timer=setTimeout(()=>{if(track.clientWidth)changeStep?.(Math.max(0,Math.min(4,Math.round(track.scrollLeft/track.clientWidth))));},120);},{passive:true});
-  if(window.ResizeObserver){observer=new ResizeObserver(resize);for(const page of pages)observer.observe(page);observer.observe(track);}
-  update();changeStep(current);track.scrollLeft=current*track.clientWidth;
-  cleanup=()=>{clearTimeout(timer);observer?.disconnect();};
+ cleanup?.();cleanup=null;activeRoot=root;changeStage=null;
+ const form=root?.querySelector('form[data-preference-editor]');if(!form)return;
+ const controller=new AbortController(),opts={signal:controller.signal};
+ changeStage=stage=>{form.dataset.prefStep=String(stage);$('[data-pref-table-panel]',form).hidden=stage===0;$('[data-interview-panel]',root).hidden=stage===1;onStep(stage);};
+ const persist=()=>form.elements.criteria_json.dispatchEvent(new Event('input',{bubbles:true}));
+ const syncCriteria=()=>{const values=$$('[data-criterion-row]',form).map(row=>Object.fromEntries($$('[data-criterion-field]',row).map(el=>{const key=el.dataset.criterionField;return [key,key==='hard'?el.value==='hard':['rating','weight'].includes(key)?Number(el.value):el.value];})));form.elements.criteria_json.value=JSON.stringify(values);};
+ root.addEventListener('click',event=>{const button=event.target.closest('button');if(!button||button.disabled)return;if(button.hasAttribute('data-pref-table'))goToPreferenceStep(1);else if(button.hasAttribute('data-pref-interview'))goToPreferenceStep(0);else if(button.hasAttribute('data-pref-add-criterion')){const values=parse(form.elements.criteria_json.value,[]);if(values.length>=12)return;values.push({name:'',rating:100,weight:3,hard:false,scope:'any'});form.elements.criteria_json.value=JSON.stringify(values);$('[data-pref-criteria]',form).innerHTML=criterionRows(values);persist();}else if(button.hasAttribute('data-pref-remove-criterion')){const values=parse(form.elements.criteria_json.value,[]);values.splice(Number(button.dataset.prefRemoveCriterion),1);form.elements.criteria_json.value=JSON.stringify(values);$('[data-pref-criteria]',form).innerHTML=criterionRows(values);persist();}else if(button.hasAttribute('data-pref-resolve')||button.hasAttribute('data-pref-note')){const values=lines(form.elements.unresolved.value),index=Number(button.dataset.prefResolve??button.dataset.prefNote),[text]=values.splice(index,1);if(text&&button.hasAttribute('data-pref-note'))form.elements.notes.value=[...new Set([...lines(form.elements.notes.value),text])].join('\n');form.elements.unresolved.value=values.join('\n');button.closest('.pref-question').remove();persist();}},opts);
+ const update=event=>{if(event?.target?.dataset.criterionField){syncCriteria();persist();}const disabled=form.elements.time_unlimited.checked||form.dataset.locked==='true'||form.dataset.saving==='true';form.elements.available_start.disabled=disabled;form.elements.available_end.disabled=disabled;updatePreferenceFeedback(form);};
+ form.addEventListener('input',update,opts);form.addEventListener('change',update,opts);
+ const card=$('[data-interview-card]',root);let drag=null;
+ if(card){const stamp=$('[data-interview-stamp]',card);const reset=()=>{card.style.transform='';stamp.style.opacity='0';};card.addEventListener('pointerdown',event=>{if(event.button!==0||event.target.closest('button,input,textarea'))return;drag={id:event.pointerId,x:event.clientX,y:event.clientY,dx:0,dy:0};card.setPointerCapture(event.pointerId);},opts);card.addEventListener('pointermove',event=>{if(!drag||drag.id!==event.pointerId)return;drag.dx=event.clientX-drag.x;drag.dy=event.clientY-drag.y;if(Math.abs(drag.dx)<12||Math.abs(drag.dx)<Math.abs(drag.dy)*1.3)return;const dx=Math.max(-100,Math.min(100,drag.dx)),choice=dx>0?'right':'left';card.style.transform=`translateX(${dx}px) rotate(${dx/16}deg)`;stamp.textContent=$(`[data-choice="${choice}"]`,card).textContent;stamp.style.opacity=String(Math.min(1,Math.abs(dx)/55));},opts);card.addEventListener('pointerup',event=>{if(!drag||drag.id!==event.pointerId)return;const choice=Math.abs(drag.dx)>70&&Math.abs(drag.dx)>Math.abs(drag.dy)*1.3?(drag.dx>0?'right':'left'):null;drag=null;reset();if(choice)$(`[data-choice="${choice}"]`,card).click();},opts);card.addEventListener('pointercancel',()=>{drag=null;reset();},opts);}
+ update();changeStage(Number(form.dataset.prefStep||0));cleanup=()=>controller.abort();
 }

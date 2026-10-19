@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from . import accounts, ai, domain, engine, store
+from . import accounts, agent, ai, domain, engine, store
 from .cli import verify_password
 from .config import WEB_DIR, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
 from .models import AIInput, CreateRoom, JoinRoom, Login, ModelDiscovery, Mutation
@@ -78,6 +78,7 @@ async def maintenance():
                 if changed:
                     store.save_room(db, room)
                     hub.publish(key)
+            await maybe_advance_agent(room)
             await asyncio.sleep(0)
         with store.transaction() as db:
             db.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
@@ -209,6 +210,7 @@ async def room_state(key: str, request: Request):
     room = current_room(key)
     result = domain.view(room, uid, hub.online(room["id"]))
     result["ai_pending"] = (room["id"], uid) in coordinator.pending
+    result["agent_pending"] = bool(room.get("agent", {}).get("running") and (room["id"], room["host_id"]) in coordinator.pending) if room.get("agent") else False
     return result
 
 
@@ -236,7 +238,8 @@ async def room_action(key: str, data: Mutation, request: Request):
         domain.mutate(room, uid, data.action, data.payload, data.revision, store.settings(db))
         store.save_room(db, room)
     hub.publish(room["id"])
-    return domain.view(room, uid, hub.online(room["id"]))
+    await maybe_advance_agent(room)
+    return domain.view(current_room(key), uid, hub.online(room["id"]))
 
 
 @app.get("/api/rooms/{key}/events")
@@ -297,27 +300,56 @@ async def room_ai(key: str, data: AIInput, request: Request):
     domain.member(room, uid)
     domain.require(room["state"] not in domain.TERMINAL, "决策已结束")
     domain.require(data.kind != "scenario", "场景草稿请在创建页面生成")
-    if data.kind in {"preferences", "negotiate"}:
+    if data.kind in {"preferences", "negotiate", "interview"}:
         domain.editable(room)
+    if data.kind == "agent":
+        domain.host(room, uid)
+    return await queue_room_ai(room, uid, data)
+
+
+async def maybe_advance_agent(room):
+    report = room.get("agent") or {}
+    if not report.get("enabled") or report.get("attempted_input_version") == room["input_version"] or room["state"] in domain.TERMINAL | {"VOTING"} or not all(member["confirmed"] for member in engine.active_members(room)):
+        return
+    if (room["id"], room["host_id"]) in coordinator.pending:
+        return
+    try:
+        await queue_room_ai(room, room["host_id"], AIInput(kind="agent", text="决策信息已更新，请自主判断下一步；必要时调用分析工具，比较并解释当前方案、冲突和待补信息。"))
+    except ai.AIError:
+        pass  # Queue capacity is bounded; the maintenance loop can try after capacity frees.
+
+
+async def queue_room_ai(room, uid, data):
     config = store.settings()
     async def operation():
-        return await ai.complete(config, room, uid, data.kind, data.text)
+        if data.kind == "agent":
+            return await agent.run(config, room, uid, data.text)
+        return await ai.complete(config, room, uid, data.kind, data.text, data.draft)
     async def complete(result, error):
         with store.transaction() as db:
             current = store.load_room(db, room["id"])
             if not current or not any(m["id"] == uid and m["status"] == "approved" for m in current["members"]):
                 return
             content, metadata = (error, {"error": True}) if error else result
+            prepared = metadata.pop("_prepared_analysis", None)
+            if data.kind == "agent":
+                stale = current["input_version"] != room["input_version"] or current["state"] in domain.TERMINAL | {"VOTING"}
+                if prepared is not None and not stale:
+                    domain.analyze(current, prepared)
+                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "updated":time.time()}
+                store.save_room(db, current)
+            metadata["request_id"] = data.request_id
             metadata["input_version"] = room["input_version"]
             metadata["preference_version"] = next(m["preference_version"] for m in room["members"] if m["id"] == uid)
             store.append_message(db, room["id"], uid, "assistant", data.kind, content, metadata)
-        # pending is cleared before clients reload state; task finally also removes it.
         coordinator.pending.pop((room["id"], uid), None)
         hub.publish(room["id"])
     coordinator.submit((room["id"], uid), operation, complete)
     with store.transaction() as db:
         store.append_message(db, room["id"], uid, "user", data.kind, data.text)
         current = get_room(db, room["id"])
+        if data.kind == "agent":
+            current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"]}
         store.save_room(db, current)
     hub.publish(room["id"])
     return {"queued": True}

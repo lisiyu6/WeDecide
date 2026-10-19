@@ -28,7 +28,7 @@ class PreferenceTemplateTests(unittest.TestCase):
           import {preferenceEditor} from './web/preferences.js';
           const room={id:'test-room',state:'COLLECTING',resources:[],
             me:{preference:null,preference_version:0,confirmed:false}};
-          console.log(JSON.stringify({editor:preferenceEditor({room,prefStep:0})}));
+          console.log(JSON.stringify({editor:preferenceEditor({room,prefStep:0,messages:[]})}));
         """
         result = subprocess.run(
             ['node', '--input-type=module', '-e', script],
@@ -37,8 +37,11 @@ class PreferenceTemplateTests(unittest.TestCase):
         cls.html = json.loads(result.stdout)['editor']
         cls.elements = Elements(cls.html)
 
-    def test_all_five_cards_and_confirmation_are_real_elements(self):
-        self.assertEqual(len(self.elements.matching('data-pref-page')), 5)
+    def test_ai_interview_and_real_editable_table_have_separate_confirmation(self):
+        forms=[attrs.get('id') for tag,attrs in self.elements.nodes if tag=='form']
+        self.assertIn('interview-form',forms)
+        self.assertIn('preference-form',forms)
+        self.assertGreaterEqual(len([tag for tag,_ in self.elements.nodes if tag=='table']),2)
         self.assertEqual(len(self.elements.matching('data-pref-confirm')), 1)
         self.assertEqual(len(self.elements.matching('data-pref-validation')), 1)
 

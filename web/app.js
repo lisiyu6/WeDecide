@@ -1,10 +1,11 @@
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
+import {manualPlanForm} from './decision.js';
 import {home,creation,joinPage,waiting,accountPage} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
-import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep} from './preferences.js';
+import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep,latestInterview,interviewDraft} from './preferences.js';
 
-const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',prefDraft:null,simFairness:null,menu:false,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
+const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
 let stream=null,deletingRoom=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
 const roomPath=suffix=>`/api/rooms/${encodeURIComponent(state.room.id)}${suffix}`;
 const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
@@ -38,6 +39,7 @@ function showAccount(next,mode=null){state.route='auth';state.room=null;state.au
 function render(preserve=false) {
  const root=$('#app');
  const saved=preserve?captureInputs(root):null;
+ const expanded=preserve?$$('details[data-proposal-detail][open]',root).map(el=>el.dataset.proposalDetail):[];
  if(saved)saved.values=saved.values.filter(v=>state.dirtyForms.has(v.form)&&!(v.form==='preference-form'&&(terminal.has(state.room?.state)||state.room?.state==='VOTING')));
  if(state.route==='home')root.innerHTML=home(state.rooms,state.bootstrap);
  else if(state.route==='new')root.innerHTML=creation(state.bootstrap,state.creationDraft);
@@ -45,6 +47,7 @@ function render(preserve=false) {
  else if(state.route==='auth')root.innerHTML=accountPage(state.bootstrap,state.authMode,state.authNext);
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state):waiting(state.room);
  if(saved)restoreInputs(root,saved);
+ for(const id of expanded){const detail=$$('details[data-proposal-detail]',root).find(el=>el.dataset.proposalDetail===id);if(detail)detail.open=true;}
  const roomView=state.route==='room'&&state.room?.me.status==='approved'?$('#room-view',root):null;
  if(roomView&&state.tab==='settings')renderProviderModels(roomView);
  mountPreferenceEditor(state.tab==='preferences'?roomView:null,step=>{state.prefStep=step;if(state.prefDraft&&state.prefDraft.step!==step){state.prefDraft.step=step;saveDraft(draftKey(),state.prefDraft);}});
@@ -123,7 +126,7 @@ async function route() {
      if(version!==routeVersion)return;
      state.code=code;state.tab=tab;state.room=room;state.route='room';state.messages=messages;state.provider=provider;state.hasOlder=messages.length===50;
      if(previousRoom!==room.id){state.prefAiOpen=false;state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());state.prefStep=state.prefDraft?.step??0;}
-     state.chatRaw=loadDraft(chatKey())||'';
+     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';
      render();connect();return;
    }
    const rooms=await api('/api/rooms');if(version!==routeVersion)return;
@@ -148,17 +151,33 @@ async function mutate(action,payload={},revision=null) {
    return r;
  }catch(error){if(error.status===409&&version===routeVersion)await refresh(true);throw error;}
 }
-function readRules(d,defaults={}) {return {...defaults,threshold:Number(d.threshold)/100,fairness:Number(d.fairness)/100,max_members:Number(d.max_members),max_rounds:Number(d.max_rounds),vote_seconds:Number(d.vote_seconds),...(d.max_activities?{max_activities:Number(d.max_activities),transfer_minutes:Number(d.transfer_minutes),transfer_cost:Number(d.transfer_cost)}:{})};}
+function readRules(d,defaults={}) {return {...defaults,threshold:Number(d.threshold)/100,fairness:Number(d.fairness)/100,max_members:Number(d.max_members),max_rounds:Number(d.max_rounds),vote_seconds:Number(d.vote_seconds),...(d.max_activities?{min_activities:Number(d.min_activities||1),max_activities:Number(d.max_activities),transfer_minutes:Number(d.transfer_minutes),transfer_cost:Number(d.transfer_cost)}:{})};}
 function readScenario(d) {return {title:d.title.trim(),city:d.city.trim(),date:d.date,description:d.description,reference_budget:number(d.reference_budget)};}
 async function resourceDialog(resource={}) {state.resourceRevision=state.room.revision;dialog(resource.id?'编辑候选活动':'添加一个候选活动',resourceForm(resource));}
 installProviderModels(form=>{
  if(form.elements.mode.value!=='custom')throw new Error('请先选择房间专用接口，再填写端点与密钥');
  return post(roomPath('/provider/models'),{provider:readProvider(form)});
 });
+async function askInterview(text) {
+ if(state.room.ai_pending)throw new Error('AI 正在处理你上一条回答，请稍候');
+ const form=$('#preference-form'),draft=form?readPreference(form):interviewDraft(state);
+ await post(roomPath('/ai'),{kind:'interview',text,draft,request_id:crypto.randomUUID?.()||String(Date.now())});
+ state.room.ai_pending=true;state.interviewRaw='';state.dirtyForms.delete('interview-form');deleteDraft(`wd-interview:${state.room.id}:${state.room.me.id}`);state.prefStep=0;render(true);
+}
 const handlers={
  'menu':()=>{state.menu=!state.menu;$('.sidebar')?.classList.toggle('open',state.menu);const backdrop=$('.sidebar-backdrop');if(backdrop)backdrop.hidden=!state.menu;$('.mobile-menu')?.setAttribute('aria-expanded',String(state.menu));},
  'account-logout':async()=>{await post('/api/auth/logout');stream?.close();state.bootstrap=null;state.room=null;state.messages=[];state.prefDraft=null;state.creationDraft={};deleteDraft('wd-create');navigate('/');},
  'refresh':()=>refresh(true),
+ 'toggle-agent':el=>mutate('agent_toggle',{enabled:el.dataset.enabled==='true'}),
+ 'run-agent':async()=>{await post(roomPath('/ai'),{kind:'agent',text:'请主动推进本次决策，判断现在该澄清目标、了解成员、提出备选、调用校核还是比较协商。'});state.room.ai_pending=true;await refresh(true);},
+ 'apply-agent-draft':()=>mutate('agent_draft').then(()=>toast('已采纳为待核对候选；请在房间设置核对事实')),
+ 'plan-new':()=>{state.planRevision=state.room.revision;dialog('手动编排活动行程',manualPlanForm(state.room));},
+ 'plan-edit':el=>{state.planRevision=state.room.revision;dialog('编辑活动行程',manualPlanForm(state.room,state.room.manual_plans.find(p=>p.id===el.dataset.id)));},
+ 'plan-remove':el=>confirmAction('移除自定义行程','相关方案将按最新信息重新评价。',()=>mutate('plans',{plans:state.room.manual_plans.filter(p=>p.id!==el.dataset.id)})),
+
+ 'interview-answer':el=>{const turn=latestInterview(state)?.metadata.interview;if(!turn)throw new Error('问题已变化，请刷新后继续');const answer=el.dataset.choice==='skip'?'这项暂未确定，请不要替我设置条件':turn[el.dataset.choice];return askInterview(`针对问题「${turn.question}」，我的回答是：${answer}`);},
+ 'interview-summary':()=>askInterview('请先把已有回答整合成需求表，保留未知项，停止继续追问。'),
+ 'explain-comparison':async()=>{await post(roomPath('/ai'),{kind:'explain',text:'请详细比较当前有效方案，解释与我需求的匹配、复杂取舍、未量化要求和资料缺项，并给出下一步。'});state.room.ai_pending=true;render(true);},
  'invite':()=>{const base=state.bootstrap.public_url||location.origin;const url=`${base}/r/${state.room.code}`;dialog('让伙伴一起加入',`<p class="muted">分享这个链接或房间码。申请加入后，需要房主批准。</p><div class="room-code">${esc(state.room.code)}</div><input class="copy-input" readonly value="${esc(url)}"><img class="qr" src="${roomPath('/invite.svg')}" alt="房间邀请二维码"><div class="actions"><button class="button" data-action="copy-invite">${icon('link',15)} 复制邀请链接</button></div>`);},
  'copy-invite':()=>copy(`${state.bootstrap.public_url||location.origin}/r/${state.room.code}`),
  'approve':el=>mutate('approve',{member_id:el.dataset.id}),
@@ -174,7 +193,7 @@ const handlers={
  'edit-request':el=>{const q=state.room.requests.find(q=>q.id===el.dataset.id);state.editRequest=q;dialog('调整后，由你确认',`<p class="hint">字段：${esc(q.field)}。时间输入一天内分钟数，类别或地点列表输入 JSON 数组，预算与时长填数值。</p><form id="edit-request-form" class="stack" style="margin-top:18px">${field('你愿意接受的新值','value',JSON.stringify(q.after),'text','required')}<button type="submit" class="button">按这个值确认修改</button></form>`);},
  'chat-mode':el=>{state.chatMode=el.dataset.mode;state.chatRaw=loadDraft(chatKey())||'';state.dirtyForms.delete('chat-form');render(true);},
  'older-messages':async()=>{if(!state.messages.length)return;const rows=await api(roomPath(`/messages?before=${state.messages[0].id}`));state.messages=[...rows,...state.messages].slice(-300);state.hasOlder=rows.length===50&&state.messages.length<300;render(true);},
- 'apply-draft':el=>{const row=state.messages.find(m=>m.id===Number(el.dataset.id));if(!row?.metadata.draft)return;if(row.metadata.preference_version!==state.room.me.preference_version)throw new Error('这份 AI 草稿基于旧版个人条件，请重新提取或手动调整');state.prefStep=0;state.prefDraft={preference:row.metadata.draft,preference_version:row.metadata.preference_version,step:0};saveDraft(draftKey(),state.prefDraft);state.dirtyForms.delete('preference-form');if(state.tab==='preferences')render(false);else navigate(`/r/${state.room.code}?view=preferences`);toast('草稿已填入，请逐项核对再确认');},
+ 'apply-draft':el=>{const row=state.messages.find(m=>m.id===Number(el.dataset.id));if(!row?.metadata.draft)return;if(row.metadata.preference_version!==state.room.me.preference_version)throw new Error('这份 AI 草稿基于旧版个人条件，请重新提取或手动调整');state.prefStep=1;state.prefDraft={preference:row.metadata.draft,preference_version:row.metadata.preference_version,step:1};saveDraft(draftKey(),state.prefDraft);state.dirtyForms.delete('preference-form');if(state.tab==='preferences')render(false);else navigate(`/r/${state.room.code}?view=preferences`);toast('草稿已填入，请逐项核对再确认');},
  'discard-pref':()=>{state.prefDraft=null;deleteDraft(draftKey());state.dirtyForms.delete('preference-form');render(false);},
  'add-resource':()=>resourceDialog(),
  'edit-resource':el=>resourceDialog(state.room.resources.find(r=>r.id===el.dataset.id)),
@@ -214,12 +233,15 @@ async function submit(form) {
    }
    deleteDraft('wd-create');state.creationDraft={};navigate(`/r/${room.code}`);break;
   }
+  case 'agent-form':await post(roomPath('/ai'),{kind:'agent',text:d.text.trim()||'请自主判断并推进本次决策，必要时调用分析工具。'});state.room.ai_pending=true;await refresh(true);break;
+  case 'plan-form':{const steps=[];for(let i=0;i<5;i++){if(d[`resource_${i}`]){const start=minutes(d[`start_${i}`]);if(start==null||start<0||start>=1440)throw new Error('请填写有效的活动开始时间');steps.push({resource_id:d[`resource_${i}`],start});}}const plan={id:d.id,title:d.title,description:d.description,steps};await mutate('plans',{plans:d.id?state.room.manual_plans.map(p=>p.id===d.id?plan:p):[...state.room.manual_plans,plan]},state.planRevision);$('#dialog').close();toast('已保存行程；Agent 会按最新版本继续');break;}
+  case 'interview-form':await askInterview(d.text.trim()||'请根据本次决策场景，先了解我的喜好，再按我的回答动态追问，最后整合需求表。');break;
   case 'preference-form':{
    if(form.dataset.locked==='true'||form.dataset.saving==='true')return;
    const step=Number(form.dataset.prefStep||0);
-   if(step!==4){goToPreferenceStep(step+1);return;}
+   if(step!==1){goToPreferenceStep(1);return;}
    const feedback=updatePreferenceFeedback(form);
-   if(!feedback.ready){goToPreferenceStep(feedback.pending?3:feedback.errors[0]?.step??0);return;}
+   if(!feedback.ready){goToPreferenceStep(1);return;}
    const preference=readPreference(form),roomId=state.room.id,key=draftKey(),draft=state.prefDraft;
    state.savingPreferences.add(roomId);form.dataset.saving='true';$('.pref-fields',form).disabled=true;updatePreferenceFeedback(form);
    try{
@@ -248,7 +270,8 @@ async function submit(form) {
    await mutate('answer_request',{request_id:state.editRequest.id,decision:'accept',value});$('#dialog').close();break;
   }
   case 'resource-form':{
-   const resource={id:d.id,name:d.name.trim(),category:d.category.trim(),location:d.location.trim(),cost:number(d.cost),cost_upper:number(d.cost_upper),fixed_cost:number(d.fixed_cost),start:minutes(d.start),end:minutes(d.end),duration:number(d.duration),source:d.source,source_url:d.source_url.trim(),confirmed:form.elements.confirmed.checked,verified:form.elements.verified.checked};
+   const attributes={};for(const line of (d.attributes||'').split('\n').map(s=>s.trim()).filter(Boolean)){const match=line.match(/^(.+?)\s*[=：:]\s*(是|否|true|false|有|无)$/);if(!match)throw new Error('属性请按“名称=是”或“名称=否”填写，无法判断时留空');attributes[match[1].trim()]=['是','true','有'].includes(match[2]);}
+   const resource={kind:d.kind||'activity',description:d.description||'',steps:(d.steps||'').split('\n').map(s=>s.trim()).filter(Boolean),attributes,id:d.id,name:d.name.trim(),category:d.category.trim(),location:d.location.trim(),cost:number(d.cost),cost_upper:number(d.cost_upper),fixed_cost:number(d.fixed_cost),start:minutes(d.start),end:minutes(d.end),duration:number(d.duration),source:d.source,source_url:d.source_url.trim(),confirmed:form.elements.confirmed.checked,verified:form.elements.verified.checked};
    const resources=d.id?state.room.resources.map(r=>r.id===d.id?resource:r):[...state.room.resources,resource];
    await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('候选活动已保存');break;
   }
@@ -284,7 +307,8 @@ document.addEventListener('input',event=>{
  if(formId(form)==='preference-form'){
    state.prefDraft={preference:readPreference(form),preference_version:state.prefDraft?.preference_version??state.room.me.preference_version,step:state.prefStep||0};saveDraft(draftKey(),state.prefDraft);
    const badge=$('[data-pref-badge]');if(badge){badge.textContent='草稿 · 待你确认';badge.classList.remove('good');}
- }else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
+ }else if(formId(form)==='interview-form'){state.interviewRaw=form.elements.text.value;saveDraft(`wd-interview:${state.room.id}:${state.room.me.id}`,state.interviewRaw);}
+ else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
  else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
  else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;setText('#fairness-label',`${event.target.value}%`,form);}
  else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}

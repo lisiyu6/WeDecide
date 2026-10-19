@@ -19,7 +19,66 @@ def attribute_match(resources, criterion):
     return True if True in values else None if None in values else False
 
 
+def evaluate_decision(room, option, fairness=None, members=None):
+    members = members if members is not None else active_members(room)
+    count = len(members)
+    cost = None if option["cost"] is None else option["cost"] + option["fixed_cost"] / max(1, count)
+    upper = None if cost is None else (option["cost_upper"] if option["cost_upper"] is not None else option["cost"]) + option["fixed_cost"] / max(1, count)
+    violations, unknown, utilities = [], [], []
+    if not option["confirmed"]:
+        unknown.append("方案事实尚未由房主核对")
+    for member in members:
+        preference = member.get("preference")
+        if not preference or not member.get("confirmed"):
+            unknown.append("存在未确认的成员需求")
+            continue
+        dimensions = []
+        if preference["allowed_locations"]:
+            if not option["location"]:
+                unknown.append("通用备选缺少地点，无法核对一位成员的必要地点要求")
+            elif option["location"] not in preference["allowed_locations"]:
+                violations.append({"member_id":member["id"],"field":"allowed_locations","message":"不满足一位成员的必要地点要求"})
+        if preference["available_start"] != 0 or preference["available_end"] != 1440 or preference["max_duration"] is not None:
+            unknown.append("通用备选未提供活动行程，无法核对一位成员的必要时间或时长要求")
+        if preference["budget_max"] is not None:
+            if upper is None:
+                unknown.append("方案缺少费用，无法判断一位成员的必要预算")
+            elif upper > preference["budget_max"]:
+                violations.append({"member_id": member["id"], "field": "budget_max", "message": "超出一位成员确认的预算上限"})
+        if preference["budget_target"] is not None or preference.get("cost_preference") == "lower":
+            target = preference["budget_target"]
+            known = [r["cost"] for r in room["resources"] if r["cost"] is not None]
+            scale = max(1, mean(known)) if known else 1
+            value = None if cost is None else max(0, 100 - 100 * max(0, cost-target) / max(target, 50)) if target is not None else 100 * scale / (scale + cost)
+            dimensions.append({"label": "费用偏好", "score": value, "weight": preference["budget_weight"]})
+        if option["category"] in preference["excluded_categories"]:
+            violations.append({"member_id": member["id"], "field": "excluded_categories", "message": "属于一位成员明确排除的类别"})
+        if option["category"] in preference["categories"]:
+            dimensions.append({"label": "类别偏好", "score": preference["categories"][option["category"]], "weight": preference["activity_weight"]})
+        for criterion in preference.get("criteria", []):
+            matched = attribute_match([option], criterion)
+            value = None if matched is None else 50 if criterion.get("rating") == 50 else 100 if matched else 0
+            if criterion.get("hard"):
+                if matched is None:
+                    unknown.append("一位成员的必要要求缺少方案事实依据")
+                elif matched is False:
+                    violations.append({"member_id": member["id"], "field": "criteria", "message": "不满足一位成员明确确认的必要属性要求"})
+            dimensions.append({"label": criterion["name"], "score": value, "weight": criterion.get("weight",3)})
+        if preference["other"]:
+            dimensions.append({"label": "原话与主观要求（由 AI 解释，未强行量化）", "score": None, "weight": 3})
+        valid = [dimension for dimension in dimensions if dimension["score"] is not None]
+        utility = sum(d["score"]*d["weight"] for d in valid)/sum(d["weight"] for d in valid) if valid else None
+        utilities.append({"member_id": member["id"], "score": round(utility,2) if utility is not None else None, "dimensions": dimensions, "coverage": [len(valid),len(dimensions)]})
+    numbers = [utility["score"] for utility in utilities if utility["score"] is not None]
+    average, minimum = (mean(numbers),min(numbers)) if numbers else (None,None)
+    weight = room["rules"]["fairness"] if fairness is None else fairness
+    score = None if average is None else (1-weight)*average+weight*minimum
+    return {"kind":"decision", "status":"INFEASIBLE" if violations else "UNKNOWN" if unknown else "FEASIBLE", "violations":violations, "unknown":list(dict.fromkeys(unknown)), "cost":round(cost,2) if cost is not None else None, "cost_upper":round(upper,2) if upper is not None else None, "start":None,"end":None,"duration":None,"transfers":0,"wait_minutes":0,"utilities":utilities,"average":average,"minimum":minimum,"score":score,"coverage":[len(numbers),count],"partial":len(numbers)!=count or any(u["coverage"][0]<u["coverage"][1] for u in utilities),"source_status":"VERIFIED_BY_ORGANIZER" if option["verified"] else "USER_PROVIDED" if option["confirmed"] else "UNCONFIRMED","cost_breakdown":{"activities":option["cost"],"shared":option["fixed_cost"]/max(1,count),"transfer":0,"people":count}}
+
+
 def evaluate(room, itinerary, fairness=None, members=None):
+    if len(itinerary) == 1 and itinerary[0]["resource"].get("kind") == "decision":
+        return evaluate_decision(room, itinerary[0]["resource"], fairness, members)
     members = members if members is not None else active_members(room)
     rules = room["rules"]
     resources = [item["resource"] for item in itinerary]
@@ -30,6 +89,8 @@ def evaluate(room, itinerary, fairness=None, members=None):
     upper = (sum((r["cost_upper"] if r["cost_upper"] is not None else r["cost"]) + r["fixed_cost"] / max(1, count) for r in resources) + transfers * rules["transfer_cost"]) if known_cost else None
     start, end = itinerary[0]["start"], itinerary[-1]["end"]
     violations, unknown = [], []
+    if any(resource.get("kind") == "decision" for resource in resources):
+        violations.append({"member_id":None,"field":"kind","message":"通用备选方案应独立比较，不能拼成活动行程"})
     if not room["scenario"].get("city", "").strip():
         unknown.append("活动城市尚未确认")
     if not room["scenario"].get("date"):
@@ -123,11 +184,11 @@ def evaluate(room, itinerary, fairness=None, members=None):
 
 def rank_key(proposal):
     e = proposal["evaluation"]
-    return ({"FEASIBLE": 0, "UNKNOWN": 1, "INFEASIBLE": 2}[e["status"]], -(e["score"] if e["score"] is not None else -1), len(e["violations"]), e["cost_upper"] if e["cost_upper"] is not None else float("inf"), e["start"])
+    return ({"FEASIBLE": 0, "UNKNOWN": 1, "INFEASIBLE": 2}[e["status"]], -(e["score"] if e["score"] is not None else -1), len(e["violations"]), e["cost_upper"] if e["cost_upper"] is not None else float("inf"), (e["start"] or 0))
 
 
 def generate(room):
-    resources, members, rules = room["resources"], active_members(room), room["rules"]
+    resources, members, rules = [r for r in room["resources"] if r.get("kind", "activity") == "activity"], active_members(room), room["rules"]
     prefs = [m["preference"] for m in members if m.get("preference")]
     hard_start = max((p["available_start"] for p in prefs), default=0)
     candidates, considered, bounded = {}, 0, False
@@ -194,6 +255,14 @@ def generate(room):
             bounded = True
         beam = [sequence for sequence, _ in stage[:48]]
     chosen = sorted(candidates.values(), key=rank_key)[:6]
+    for option in room["resources"]:
+        if option.get("kind") != "decision":
+            continue
+        proposal = {"kind":"decision", "title":option["name"], "description":option.get("description", ""), "itinerary":[{"resource":option,"start":0,"end":0}], "evaluation":evaluate_decision(room,option)}
+        chosen.append(proposal)
+        feasible_count += proposal["evaluation"]["status"] == "FEASIBLE"
+        combinations += 1
+        considered += 1
     by_id = {resource["id"]: resource for resource in resources}
     warnings = []
     for plan in room.get("manual_plans", []):
@@ -208,8 +277,8 @@ def generate(room):
         considered += 1
     chosen.sort(key=rank_key)
     for index, proposal in enumerate(chosen):
-        proposal.update(id=new_id(), code=chr(65 + index), version=room["analysis_version"] + 1, input_version=room["input_version"])
-    scope = f"单城市单日，最少 {rules.get('min_activities', 1)}、最多 {rules['max_activities']} 项活动；每层最多 2000 个时间安排、保留 48 条路径，另评价房主自定义行程。有限搜索不保证全局最优。"
+        proposal.update(id=new_id(), code=str(index+1) if index>=26 else chr(65 + index), version=room["analysis_version"] + 1, input_version=room["input_version"])
+    scope = f"通用备选独立比较；活动工具支持单城市单日，最少 {rules.get('min_activities', 1)}、最多 {rules['max_activities']} 项活动；每层最多 2000 个时间安排、保留 48 条路径，另评价房主自定义行程。有限搜索不保证全局最优。"
     return {"proposals": chosen, "considered": considered, "resource_combinations": combinations, "scope": scope, "bounded": bounded, "warnings": warnings, "feasible_count": feasible_count}
 
 

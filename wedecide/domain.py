@@ -41,7 +41,7 @@ def new_room(user_id, data, max_members):
     rules = data.rules.model_dump()
     rules["max_members"] = min(rules["max_members"], max_members)
     now = time.time()
-    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
+    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "agent": None, "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
     event(room, "created", "房间已创建，等待成员加入并确认各自需求")
     return room
 
@@ -58,14 +58,14 @@ def invalidate(room, text):
         analyze(room)
 
 
-def analyze(room):
+def analyze(room, prepared=None):
     members = engine.active_members(room)
     require(members and all(m["confirmed"] for m in members), "所有有效成员必须先确认个人需求")
     require(room["resources"], "请先添加候选活动")
     if room["proposals"]:
         room["history"].append({"version": room["analysis_version"], "proposals": room["proposals"], "at": time.time()})
         room["history"] = room["history"][-10:]
-    analysis = engine.generate(room)
+    analysis = prepared if prepared is not None else engine.generate(room)
     room["analysis_version"] += 1
     room["analysis"] = {k: v for k, v in analysis.items() if k != "proposals"}
     room["proposals"] = analysis["proposals"]
@@ -191,6 +191,35 @@ def mutate(room, user_id, action, payload, revision, limits):
         room["resources"] = resources
         room["resource_version"] += 1
         invalidate(room, "房主更新候选活动，所有方案按新数据重新评价")
+    elif action == "agent_toggle":
+        host(room, user_id)
+        require(isinstance(payload.get("enabled"), bool), "请选择是否自动推进")
+        room["agent"] = {**(room.get("agent") or {}), "enabled":payload["enabled"]}
+        event(room, "agent_control", "房主调整 Agent 后续自动推进状态")
+    elif action == "agent_draft":
+        host(room, user_id)
+        editable(room)
+        report = room.get("agent")
+        require(report and report["input_version"] == room["input_version"], "Agent 草稿已过期，请让 Agent 继续后再采纳", 409)
+        require(not report.get("running") and not report.get("error") and not report.get("stale"), "Agent 仍在处理或结果不可用，请继续后重试")
+        require(not report.get("applied"), "这份 Agent 草稿已采纳", 409)
+        additions = [Resource(**resource).model_dump() for resource in report.get("resources", [])]
+        plans = [ManualPlan(**plan).model_dump() for plan in report.get("plans", [])]
+        require(len(room["resources"])+len(additions)<=20, "候选条目总数最多 20 个，请先整理已有候选")
+        known = {resource["id"] for resource in room["resources"]}
+        for resource in additions:
+            require(resource["id"] not in known, "Agent 建议的候选标识重复，请重新生成")
+            resource["confirmed"] = resource["verified"] = False
+            known.add(resource["id"])
+        require(all(step["resource_id"] in known for plan in plans for step in plan["steps"]), "Agent 行程引用了未知候选，请重新生成")
+        require(len(room.get("manual_plans", []))+len(plans)<=6, "自定义行程最多 6 个")
+        for plan in plans:
+            plan["id"] = new_id()
+        room["resources"].extend(additions)
+        room["manual_plans"] = room.get("manual_plans", [])+plans
+        report["applied"] = True
+        room["resource_version"] += 1
+        invalidate(room, "房主采纳 Agent 建议为候选草稿，需核对事实并全体重新评价")
     elif action == "plans":
         host(room, user_id)
         editable(room)
@@ -347,6 +376,7 @@ def view(room, user_id, online=()):
         return {"id": room["id"], "code": room["code"], "revision": room["revision"], "scenario": {"title": room["scenario"]["title"]}, "state": room["state"], "me": {"id": m["id"], "name": m["name"], "status": m["status"]}}
     r = {k: deepcopy(room[k]) for k in ("id", "code", "revision", "state", "host_id", "created", "updated", "scenario", "rules", "resources", "resource_version", "input_version", "analysis_version", "analysis", "proposals", "history", "selected_id", "round", "events", "result", "provider_id")}
     r["members"] = [{k: deepcopy(x[k]) for k in ("id", "name", "status", "confirmed", "preference_version", "attendance")} | {"online": x["id"] in online} for x in room["members"] if x["status"] == "approved" or user_id == room["host_id"]]
+    r["agent"] = deepcopy(room.get("agent"))
     r["manual_plans"] = deepcopy(room.get("manual_plans", []))
     r["me"] = deepcopy(m)
     r["vote"] = public_vote(room["vote"], user_id)
