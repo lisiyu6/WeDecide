@@ -410,7 +410,8 @@ a[href]:after{content:none}
 .model-picker select{min-height:145px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
 .model-picker option{padding:7px 8px;overflow-wrap:anywhere}
 
-.pref-workspace{display:grid;gap:20px}
+.pref-workspace{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+.pref-workspace>.card{min-width:0}
 .pref-ai>summary{display:flex;justify-content:space-between;align-items:center;gap:16px;cursor:pointer;font-size:14px}
 .pref-ai>summary>span:first-child{display:flex;align-items:center;gap:10px}
 .pref-ai-body{margin-top:22px}
@@ -457,7 +458,7 @@ a[href]:after{content:none}
 .pref-validation{font-size:12px;color:var(--muted);min-height:20px;margin-bottom:12px}
 .pref-validation.pref-invalid{color:var(--warm)}
 @media(max-width:900px){.pref-category-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:680px){.pref-editor{padding-top:20px}.pref-editor>.card-title{padding:0 18px;align-items:flex-start}.pref-progress{padding:0 16px 16px;gap:5px}.pref-progress button{font-size:11px;padding:9px 10px;flex:none}.pref-step{padding:23px 18px}.pref-step-heading h2{font-size:23px}.pref-large-fields{grid-template-columns:1fr}.pref-category-grid{grid-template-columns:1fr}.pref-category>div{gap:10px}.pref-review>div{grid-template-columns:1fr;gap:5px;padding:13px 16px}.pref-footer{padding:13px 16px 17px}.pref-footer .button{padding:10px 13px;font-size:12px}.pref-footer .between{gap:8px}.pref-ai>summary{align-items:flex-start;flex-direction:column;gap:5px}.pref-question{padding:16px}.pref-question .actions{align-items:stretch;flex-direction:column}}
+@media(max-width:680px){.pref-editor{padding-top:20px}.pref-editor>.card-title{padding:0 18px;align-items:flex-start;flex-wrap:wrap}.pref-progress{padding:0 16px 16px;gap:5px}.pref-progress button{font-size:11px;padding:9px 10px;flex:none}.pref-step{padding:23px 18px}.pref-step-heading h2{font-size:23px}.pref-large-fields{grid-template-columns:1fr}.pref-category-grid{grid-template-columns:1fr}.pref-category>div{gap:10px}.pref-review>div{grid-template-columns:1fr;gap:5px;padding:13px 16px}.pref-footer{padding:13px 16px 17px}.pref-footer .button{padding:10px 13px;font-size:12px}.pref-footer .between{gap:8px;flex-wrap:wrap}.pref-ai>summary{align-items:flex-start;flex-direction:column;gap:5px}.pref-question{padding:16px}.pref-question .actions{align-items:stretch;flex-direction:column}}
 
 .pref-track:focus-visible{outline:3px solid #acbf8e;outline-offset:-3px}
 .pref-fields:disabled{opacity:.8}
