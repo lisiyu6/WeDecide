@@ -38,8 +38,8 @@ def main():
             db.execute("DELETE FROM sessions WHERE admin=1")
         print("管理员密码已更新。通过 /admin 访问管理页。")
     else:
-        import uvicorn
-        uvicorn.run("wedecide.app:app", host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False, limit_concurrency=512, timeout_keep_alive=5)
+        from .server import run
+        run(args.host, args.port)
 
 if __name__ == "__main__":
     main()

@@ -35,6 +35,8 @@ uv pip install -r requirements.txt
 - 管理员与服务必须使用同一个 `WEDECIDE_DATA_DIR`。默认目录为项目的 `data/`。
 - 邀请二维码使用当前访问地址；请从局域网 IP 打开页面后分享，或设置 `WEDECIDE_PUBLIC_URL`，避免把 localhost 链接发给朋友。
 
+停止服务按一次 `Ctrl+C`：程序先通知实时同步连接结束，再等待普通请求退出，连接排空等待上限为 5 秒。已保存数据保留；未完成的 AI 请求在退出时取消。
+
 自定义端口：
 
 ```bash

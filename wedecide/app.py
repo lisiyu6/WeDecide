@@ -91,11 +91,14 @@ async def maintenance():
 async def lifespan(app):
     store.init()
     task = asyncio.create_task(maintenance())
-    yield
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
-    await coordinator.close()
+    try:
+        yield
+    finally:
+        hub.close()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        await coordinator.close()
 
 
 app = FastAPI(title="WeDecide", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -223,6 +226,7 @@ async def room_action(key: str, data: Mutation, request: Request):
 
 @app.get("/api/rooms/{key}/events")
 async def events(key: str, request: Request):
+    domain.require(not hub.closing, "服务正在停止，请稍后重新连接", 503)
     uid = authenticated(request)
     room = current_room(key)
     domain.member(room, uid, approved=False)
@@ -232,11 +236,13 @@ async def events(key: str, request: Request):
     async def stream():
         try:
             yield "event: change\ndata: {}\n\n"
-            while not await request.is_disconnected():
+            while not hub.closing and not await request.is_disconnected():
                 if not store.session(request.cookies.get("wd_session")):
                     break
                 try:
                     await asyncio.wait_for(queue.get(), timeout=20)
+                    if hub.closing:
+                        break
                     yield "event: change\ndata: {}\n\n"
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"

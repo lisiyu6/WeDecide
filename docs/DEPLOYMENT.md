@@ -21,6 +21,10 @@ export WEDECIDE_DATA_DIR=/path/to/wedecide-data
 
 用户名只是显示名。成员凭证保存在 HttpOnly Cookie 中；不同设备或不同浏览器视为不同身份，均须房主批准。不要清除 Cookie 后期望仅凭相同用户名恢复房主权限。管理员登录凭证与成员身份分开。
 
+## 停止与重启
+
+通过 `./start.sh` 或 `wedecide serve` 启动时，收到 Ctrl+C / SIGTERM 会先唤醒并结束所有房间 SSE 长连接，再由 Uvicorn 排空请求；等待上限为 5 秒，超时取消剩余请求，随后清理维护任务与 AI 队列。这个关闭通知必须发生在服务器排空请求前，仅在 FastAPI lifespan 清理时关闭 SSE 会因生命周期顺序而卡住。停止后重新执行原启动命令即可，已持久化的房间和消息保留，未完成的 AI 请求不会跨进程恢复。
+
 ## Docker
 
 ```bash
