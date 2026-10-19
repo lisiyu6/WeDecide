@@ -399,3 +399,13 @@ dialog{padding:22px}
 .page-header{margin-top:15px}
 a[href]:after{content:none}
 }
+
+[hidden]{display:none!important}
+.provider-editor{border-color:#c8d7b7;scroll-margin-top:20px}
+.model-discovery{padding:16px;background:#f6f8f0;border:1px solid var(--line);border-radius:12px;margin-top:18px}
+.model-status:empty{display:none}
+.model-status{margin-top:10px}
+.model-error{color:var(--red)}
+.model-picker{display:grid;gap:12px;margin-top:14px}
+.model-picker select{min-height:145px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+.model-picker option{padding:7px 8px;overflow-wrap:anywhere}

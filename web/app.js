@@ -1,7 +1,7 @@
 import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
 import {home,creation,joinPage,waiting} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
-import {readProvider} from './provider.js';
+import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
 
 const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',prefDraft:null,simFairness:null,menu:false,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{}};
 let stream=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
@@ -17,6 +17,7 @@ function render(preserve=false) {
  else if(state.route==='join')root.innerHTML=joinPage(state.code);
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state):waiting(state.room);
  if(saved)restoreInputs(root,saved);
+ renderProviderModels(root);
  if(state.room?.me.status==='approved'){
    const chat=$('.chat-messages');if(chat)chat.scrollTop=chat.scrollHeight;
    countdown();
@@ -114,10 +115,10 @@ function readPreference(form) {
 function readRules(d,defaults={}) {return {...defaults,threshold:Number(d.threshold)/100,fairness:Number(d.fairness)/100,max_members:Number(d.max_members),max_rounds:Number(d.max_rounds),vote_seconds:Number(d.vote_seconds),...(d.max_activities?{max_activities:Number(d.max_activities),transfer_minutes:Number(d.transfer_minutes),transfer_cost:Number(d.transfer_cost)}:{})};}
 function readScenario(d) {return {title:d.title.trim(),city:d.city.trim(),date:d.date,description:d.description,reference_budget:number(d.reference_budget)};}
 async function resourceDialog(resource={}) {state.resourceRevision=state.room.revision;dialog(resource.id?'编辑候选活动':'添加一个候选活动',resourceForm(resource));}
-async function modelDialog() {
- const data=await post(roomPath('/provider/models'));
- dialog('选择模型',`<p class="hint" style="margin-bottom:18px">点击填入房间专用接口表单，然后保存。全局供应商的模型由管理员设置。</p><div class="model-list">${data.models.map(m=>`<button class="button secondary small" data-action="choose-model" data-model="${esc(m)}">${esc(m)}</button>`).join('')||'<p class="muted">没有返回模型，可手动填写。</p>'}</div>`);
-}
+installProviderModels(form=>{
+ if(form.elements.mode.value!=='custom')throw new Error('请先选择房间专用接口，再填写端点与密钥');
+ return post(roomPath('/provider/models'),{provider:readProvider(form)});
+});
 const handlers={
  'menu':()=>{state.menu=!state.menu;$('.sidebar')?.classList.toggle('open',state.menu);},
  'refresh':()=>refresh(true),
@@ -141,8 +142,6 @@ const handlers={
  'add-resource':()=>resourceDialog(),
  'edit-resource':el=>resourceDialog(state.room.resources.find(r=>r.id===el.dataset.id)),
  'delete-resource':el=>confirmAction('移除这个候选活动','相关候选方案会失效，并按最新资源重新分析。',()=>mutate('resources',{resources:state.room.resources.filter(r=>r.id!==el.dataset.id)})),
- 'discover-models':()=>modelDialog(),
- 'choose-model':el=>{const form=$('#room-provider');if(form.elements.mode.value!=='custom')throw new Error('请先选择房间专用接口；全局供应商由管理员管理');form.elements.model.value=el.dataset.model;state.dirtyForms.add('room-provider');state.formRevisions['room-provider']??=state.room.revision;$('#dialog').close();toast('模型已填入，请保存接口配置');},
  'display':()=>window.open(`/display/${encodeURIComponent(state.room.share_token)}`,'_blank','noopener'),
  'print':()=>window.print(),
  'finish':()=>dialog('结束并留下记录',`<form id="finish-form" class="stack">${select('结束原因','outcome','CANCELLED',[['CANCELLED','主动结束本次决策'],['NO_CONSENSUS','有方案，但未形成共识'],['NO_FEASIBLE_PROPOSAL','当前范围内没有可行方案'],['INSUFFICIENT_DATA','信息不足，无法判断']])}${textarea('给这次讨论留一句说明','explanation','','rows="3" maxlength="1000" required')}<button type="submit" class="button danger">确认结束</button></form>`),
