@@ -5,6 +5,7 @@ function login(){config=null;editor=null;editing=null;$('#app').innerHTML=`<main
 function render(){
  const navigation=[['limits','运行与容量'],['providers','全局 AI 接口'],['prompts','上下文提示词'],['rooms','房间管理']];
  $('#app').innerHTML=`<div class="admin-wrap"><header class="admin-header">${logo}<span class="muted">Administration · 管理员控制台</span><button class="button secondary small" data-action="logout">退出登录</button></header><div class="page-header"><div class="eyebrow">KEEP THINGS RUNNING, SIMPLY</div><h1>让每一次讨论，有序发生。</h1><p>管理运行限制、默认 AI 接口与仅在后端注入的上下文。</p></div><nav class="admin-tabs">${navigation.map(([key,label])=>`<button class="button secondary ${tab===key?'active':''}" data-action="tab" data-tab="${key}">${label}</button>`).join('')}</nav><main id="main">${({limits,providers,prompts,roomManagement}[tab==='rooms'?'roomManagement':tab])()}</main></div>`;
+ if(editing&&$('#admin-provider'))$('#admin-provider').elements.namedItem('id').readOnly=true;
  renderProviderModels($('#app'));
 }
 function limits(){return `<form id="admin-limits" class="card stack"><h2>保持轻量，留出余量</h2><p class="hint">限制实时生效。降低上限不会踢出已加入成员；超过新上限时阻止新增。默认配置以约 500 MB 内存目标设计，未经实测，不代表硬性内存保证。</p><div class="form-grid mobile-single">${field('同时开放房间上限','max_rooms',config.max_rooms,'number','required min="1" max="128"')}${field('单房间成员人数上限','max_members',config.max_members,'number','required min="1" max="64"')}${field('同时调用 AI 数量','ai_concurrency',config.ai_concurrency,'number','required min="1" max="16"')}${field('AI 请求总队列容量','ai_queue_limit',config.ai_queue_limit,'number','required min="1" max="128"')}${field('房间无操作自动关闭 / 小时','room_idle_hours',config.room_idle_hours,'number','required min="1" max="720"')}${field('结束后保留 / 天','retention_days',config.retention_days,'number','required min="1" max="365"')}</div><div class="notice">过期房间自动关闭，结束且超过保留期限的房间与消息自动删除。调整保留期会影响已有记录，请先导出需要保留的报告。</div><div><button class="button" type="submit">保存运行设置</button></div></form>`;}
@@ -13,9 +14,13 @@ function prompts(){const names={context:['全局上下文','应用于每次 AI �
 function roomManagement(){return `<div class="stack"><div class="three-columns"><div class="card metric"><div class="metric-label">近期保留房间</div><div class="metric-value">${rooms.length}</div></div><div class="card metric"><div class="metric-label">正在调用 AI</div><div class="metric-value">${stats.ai_running||0}</div></div><div class="card metric"><div class="metric-label">AI 活跃与排队总数</div><div class="metric-value">${stats.ai_queued||0}</div></div></div><div class="card"><div class="card-title"><h2>房间运行状态</h2><button class="button secondary small" data-action="refresh-rooms">刷新</button></div><div class="table-wrap"><table><thead><tr><th>名称 / 房间码</th><th>阶段</th><th>成员</th><th>最近操作</th><th>操作</th></tr></thead><tbody>${rooms.map(r=>`<tr><td>${esc(r.title)}<small class="hint" style="display:block">${esc(r.code)}</small></td><td>${badge(r.state)}</td><td>${r.members}</td><td>${dateTime(r.updated)}</td><td>${['COLLECTING','COMPARING','NEGOTIATING','VOTING'].includes(r.state)?`<button class="button ghost small" data-action="close-room" data-id="${esc(r.id)}">关闭房间</button>`:'已冻结记录'}</td></tr>`).join('')||'<tr><td colspan="5">尚无房间</td></tr>'}</tbody></table></div><p class="hint" style="margin-top:18px">最多展示最近 200 个房间。管理列表只包含运行摘要，不提供成员私聊或个人条件。</p></div></div>`;}
 async function loadRooms(){stats=await api('/api/admin/rooms');rooms=stats.rooms;}
 async function save(patch,closeEditor=false){
+ const draft=!closeEditor&&editor?captureInputs($('#app')):null;
+ if(draft)draft.values=draft.values.filter(value=>value.form==='admin-provider');
  config=await api('/api/admin/settings',{method:'PUT',body:{revision:config.revision,...patch}});
  if(closeEditor){editor=null;editing=null;}
- render();toast('管理设置已保存');
+ render();
+ if(draft){restoreInputs($('#app'),draft);renderProviderModels($('#app'));}
+ toast('管理设置已保存');
 }
 function providerEditor(){
  return `<section class="card provider-editor"><div class="card-title"><h2>${editing?'编辑全局供应商':'添加全局供应商'}</h2><button type="button" class="button ghost small" data-action="cancel-provider">取消</button></div>

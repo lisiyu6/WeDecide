@@ -70,12 +70,14 @@ export function readProvider(form) {
 const pickers=new Map();
 let discover=null,installed=false;
 const scope=form=>form.dataset.modelScope || form.id;
+const signature=form=>JSON.stringify(['protocol','endpoint','models_endpoint','models_path','model_id_field'].map(name=>form.elements.namedItem(name)?.value||''));
 const currentForm=key=>$$('form[data-model-scope]').find(form=>scope(form)===key);
 function picker(form) {
-  const key=scope(form);
+  const key=scope(form),fingerprint=signature(form);
+  if(pickers.has(key)&&pickers.get(key).signature!==fingerprint)pickers.delete(key);
   if(!pickers.has(key)){
     if(pickers.size>=32)pickers.delete(pickers.keys().next().value);
-    pickers.set(key,{models:[],filter:'',loading:false,fetched:false,error:''});
+    pickers.set(key,{models:[],filter:'',loading:false,fetched:false,error:'',signature:fingerprint});
   }
   return pickers.get(key);
 }

@@ -59,9 +59,9 @@
 | POST | `/api/rooms/{id}/ai` | `{"text":"...","kind":"chat|preferences|negotiate"}`；202 后通过 SSE 获取结果 |
 | POST | `/api/scenario` | 生成创建页面的场景草稿，使用默认全局供应商 |
 | GET / PUT | `/api/rooms/{id}/provider` | 仅房主；读取脱敏配置 / 保存全局选择或房间专用接口 |
-| POST | `/api/rooms/{id}/provider/models` | 仅房主；读取已保存供应商的模型列表 |
+| POST | `/api/rooms/{id}/provider/models` | 仅房主；`{}` 使用已保存接口，`{provider}` 按未保存的表单拉取，或 `{provider_id}` 查看所选全局接口 |
 
-房间 API 的保存格式为 `{revision, provider_id, provider}`；`provider=null` 表示回到全局配置。Provider 模型集中定义了 endpoint、protocol、model、api_key、auth_header、auth_prefix、headers、extra_body、request_template、response_path、timeout、max_tokens、temperature、enabled。
+房间 API 的保存格式为 `{revision, provider_id, provider}`；`provider=null` 表示回到全局配置。Provider 模型集中定义了 endpoint、protocol、model、api_key、auth_header、auth_prefix、headers、extra_body、request_template、response_path、models_endpoint、models_path、model_id_field、timeout、max_tokens、temperature、enabled。
 
 AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化草稿。草稿永远不直接写入正式条件。异步结果保留生成时的偏好版本；用户提交旧草稿需要先按当前版本重新核对。
 
@@ -74,9 +74,14 @@ AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化�
 | POST | `/api/admin/login` | `{"password":"..."}`，创建独立管理员会话 |
 | POST | `/api/admin/logout` | 注销管理员会话 |
 | GET / PUT | `/api/admin/settings` | 运行限制、全局供应商、默认值、隐藏系统上下文；保存携带设置 `revision` |
-| POST | `/api/admin/providers/{id}/models` | 查询全局供应商模型列表 |
+| POST | `/api/admin/providers/{id}/models` | 查询已保存的全局供应商模型列表 |
+| POST | `/api/admin/providers/models` | `{provider, saved_provider_id?}` 按当前表单拉取模型；编辑时复用原供应商已保存的密钥/请求头，不保存配置 |
 | GET | `/api/admin/rooms` | 最近 200 个房间运行摘要与 AI 队列状态 |
 | POST | `/api/admin/rooms/{id}/close` | 关闭活动房间，取消当前投票，保留记录 |
+
+模型发现使用 GET 请求，不发送聊天、个人偏好或管理员提示词。可通过 `models_endpoint` 指定独立完整 URL；留空时推导标准 `/models`。`models_path` 默认 `data`，支持点路径与数组索引，顶层数组也可直接读取；`model_id_field` 默认 `id`，可指定 `name` 或嵌套字段。结果去重、排序并限制为 1,000 个 ID。单次响应上限 1 MB，请求总时间上限为配置超时与 45 秒中的较小值；请求还受到全局 AI 并发和队列限制。
+
+模型发现为只读操作，草稿配置不写入 SQLite。管理员只能复用由 `saved_provider_id` 标识的原供应商凭证，房主只能复用自己房间已有的专用凭证。密钥留空保留，`clear_key=true` 才明确清除。
 
 管理页面不读取成员私聊或个人偏好。全局配置与管理员密码保存在同一数据目录中；正常用户接口不包含管理提示词。
 
@@ -89,3 +94,5 @@ AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化�
 - [HTTPX 异步与流式响应](https://www.python-httpx.org/async/)
 - [HTTPX 超时设置](https://www.python-httpx.org/advanced/timeouts/)
 - [python-qrcode SVG 生成](https://github.com/lincolnloop/python-qrcode)
+
+模型列表标准结构参考：[OpenAI List models](https://developers.openai.com/api/reference/resources/models/methods/list)。第三方实现可通过列表路径和 ID 字段适配。
