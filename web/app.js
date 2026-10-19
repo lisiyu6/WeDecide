@@ -2,6 +2,7 @@ import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,for
 import {home,creation,joinPage,waiting} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
+import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep} from './preferences.js';
 
 const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',prefDraft:null,simFairness:null,menu:false,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{}};
 let stream=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
@@ -18,6 +19,7 @@ function render(preserve=false) {
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state):waiting(state.room);
  if(saved)restoreInputs(root,saved);
  renderProviderModels(root);
+ mountPreferenceEditor(root,step=>{state.prefStep=step;});
  if(state.room?.me.status==='approved'){
    const chat=$('.chat-messages');if(chat)chat.scrollTop=chat.scrollHeight;
    countdown();
@@ -90,7 +92,7 @@ async function route() {
      }
      if(version!==routeVersion)return;
      state.code=code;state.tab=tab;state.room=room;state.route='room';state.messages=messages;state.provider=provider;state.hasOlder=messages.length===50;
-     if(previousRoom!==room.id){state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());}
+     if(previousRoom!==room.id){state.prefStep=0;state.prefAiOpen=false;state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());}
      state.chatRaw=loadDraft(chatKey())||'';
      render();connect();return;
    }
@@ -106,11 +108,6 @@ async function mutate(action,payload={},revision=null) {
    if(state.room?.id===current&&version===routeVersion){state.room={...r,ai_pending:state.room.ai_pending};state.dirtyForms.clear();state.formRevisions={};render();await refresh(false);}
    return r;
  }catch(error){if(error.status===409&&version===routeVersion)await refresh(true);throw error;}
-}
-const csv=value=>value.split(/[,，\n]/).map(s=>s.trim()).filter(Boolean);
-function readPreference(form) {
- const d=formData(form),categories={};for(const [k,v]of Object.entries(d))if(k.startsWith('category:')&&v!=='')categories[k.slice(9)]=Number(v);
- return {budget_max:number(d.budget_max),available_start:minutes(d.available_start),available_end:minutes(d.available_end),excluded_categories:csv(d.excluded_categories),allowed_locations:csv(d.allowed_locations),max_duration:number(d.max_duration),budget_target:number(d.budget_target),budget_weight:number(d.budget_weight),preferred_start:minutes(d.preferred_start),preferred_end:minutes(d.preferred_end),time_weight:number(d.time_weight),categories,activity_weight:number(d.activity_weight),other:d.other,unresolved:d.unresolved.split('\n').map(s=>s.trim()).filter(Boolean)};
 }
 function readRules(d,defaults={}) {return {...defaults,threshold:Number(d.threshold)/100,fairness:Number(d.fairness)/100,max_members:Number(d.max_members),max_rounds:Number(d.max_rounds),vote_seconds:Number(d.vote_seconds),...(d.max_activities?{max_activities:Number(d.max_activities),transfer_minutes:Number(d.transfer_minutes),transfer_cost:Number(d.transfer_cost)}:{})};}
 function readScenario(d) {return {title:d.title.trim(),city:d.city.trim(),date:d.date,description:d.description,reference_budget:number(d.reference_budget)};}
@@ -167,6 +164,8 @@ async function submit(form) {
    deleteDraft('wd-create');state.creationDraft={};navigate(`/r/${room.code}`);break;
   }
   case 'preference-form':{
+   const feedback=updatePreferenceFeedback(form);
+   if(!feedback.ready){goToPreferenceStep(feedback.pending?3:feedback.errors[0]?.step??0);return;}
    const preference=readPreference(form);
    await mutate('preference',{preference,preference_version:state.prefDraft?.preference_version??state.room.me.preference_version});
    state.prefDraft=null;deleteDraft(draftKey());render();toast('你的条件已确认，已保存新的个人版本');break;
@@ -209,10 +208,12 @@ document.addEventListener('click',async event=>{
  event.preventDefault();el.disabled=true;
  try{await handler(el);}catch(error){toast(error.message,true);}finally{el.disabled=false;}
 });
+const pendingForms=new WeakSet();
 document.addEventListener('submit',async event=>{
  if(!(event.target instanceof HTMLFormElement))return;event.preventDefault();
+ if(pendingForms.has(event.target))return;pendingForms.add(event.target);
  const button=event.submitter,old=button?.innerHTML;if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> 正在处理';}
- try{await submit(event.target);}catch(error){toast(error.message,true);}finally{if(button){button.disabled=false;button.innerHTML=old;}}
+ try{await submit(event.target);}catch(error){toast(error.message,true);}finally{pendingForms.delete(event.target);if(button){button.disabled=false;button.innerHTML=old;}if(formId(event.target)==='preference-form')updatePreferenceFeedback(event.target);}
 });
 document.addEventListener('input',event=>{
  const form=event.target.form;if(!form)return;
@@ -231,6 +232,7 @@ document.addEventListener('change',event=>{
  if(form?.id==='room-provider'&&event.target.name==='mode')$('#custom-provider-fields').hidden=event.target.value!=='custom';
  if(form?.id==='fairness-sim')render(true);
 });
+document.addEventListener('toggle',event=>{if(event.target.id==='preference-ai')state.prefAiOpen=event.target.open;},true);
 window.addEventListener('popstate',()=>void route());
 window.addEventListener('beforeunload',()=>stream?.close());
 function countdown(){

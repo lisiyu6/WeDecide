@@ -68,6 +68,7 @@ class Preference(Model):
     activity_weight: int = Field(default=3, ge=1, le=5)
     other: str = Field(default="", max_length=2000)
     unresolved: list[str] = Field(default_factory=list, max_length=20)
+    notes: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def coherent(self):
@@ -75,6 +76,8 @@ class Preference(Model):
             raise ValueError("可参加的结束时间须晚于开始时间")
         if self.preferred_start is not None and self.preferred_end is not None and self.preferred_end <= self.preferred_start:
             raise ValueError("偏好的结束时间须晚于开始时间")
+        if any(len(v) > 500 for v in self.notes):
+            raise ValueError("每条补充说明不超过 500 字")
         if len(self.categories) > 30 or any(len(v) > 80 for v in [*self.categories, *self.excluded_categories, *self.allowed_locations, *self.unresolved]):
             raise ValueError("条件条目过长或过多")
         return self

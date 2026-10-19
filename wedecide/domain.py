@@ -175,7 +175,7 @@ def mutate(room, user_id, action, payload, revision, limits):
         editable(room)
         require(payload.get("preference_version") == m["preference_version"], "你的需求已在其他页面更新，请重新核对", 409)
         pref = Preference(**payload.get("preference", {}))
-        require(not pref.unresolved, "请先解决或明确删除待澄清条件，再确认需求")
+        require(not pref.unresolved, f"还有 {len(pref.unresolved)} 项待确认问题，请在问题卡片中逐条处理后再确认")
         m.update(preference=pref.model_dump(), preference_version=m["preference_version"] + 1, confirmed=True)
         invalidate(room, f"{m['name']} 已确认第 {m['preference_version']} 版个人需求")
     elif action == "resources":
