@@ -65,5 +65,24 @@ class AccountTemplateTests(unittest.TestCase):
                 self.assertEqual(len([attrs for tag,attrs in elements.nodes if tag=='form' and attrs.get('id')=='account-form']),1)
 
 
+class RoomSettingsTemplateTests(unittest.TestCase):
+    def test_delete_button_is_available_only_to_host_in_all_room_phases(self):
+        script = """
+          import {settings} from './web/room-views.js';
+          const room={id:'room',host_id:'host',me:{id:'host'},members:[],resources:[],
+            scenario:{title:'开错的空间'},rules:{},round:0,vote:null,vote_history:[]};
+          const state={room,bootstrap:{providers:[],limits:{max_members:8}}};
+          console.log(JSON.stringify(['COLLECTING','VOTING','CANCELLED','APPROVED'].flatMap(phase=>
+            ['host','member'].map(id=>{room.state=phase;room.me.id=id;return {phase,id,html:settings(state)};}))));
+        """
+        result = subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
+        for sample in json.loads(result.stdout):
+            with self.subTest(phase=sample['phase'], identity=sample['id']):
+                buttons=[attrs for tag,attrs in Elements(sample['html']).nodes if tag=='button' and attrs.get('data-action')=='delete-room']
+                self.assertEqual(len(buttons), 1 if sample['id']=='host' else 0)
+                if buttons:
+                    self.assertNotIn('disabled', buttons[0])
+
+
 if __name__ == '__main__':
     unittest.main()

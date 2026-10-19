@@ -8,6 +8,7 @@ from pathlib import Path
 import secrets
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -201,6 +202,69 @@ class ApiWorkflowTests(unittest.TestCase):
         for path in ('/new', f"/r/{room['code']}", '/static/app.js', '/static/preferences.js'):
             with self.subTest(path=path):
                 self.assertEqual(host.get(path).status_code, 200)
+
+    def delete(self, host, room):
+        return host.delete(f"/api/rooms/{room['id']}", params={'revision': room['revision']})
+
+    def test_host_delete_removes_room_messages_and_links_only(self):
+        host, guest, room = self.pair()
+        _, other = self.room(client=host)
+        response = guest.post(f"/api/rooms/{room['id']}/messages", json={'text': '应随空间删除的讨论', 'kind': 'chat'})
+        self.assertEqual(response.status_code, 200, response.text)
+        room = host.get(f"/api/rooms/{room['id']}").json()
+        database = Path(self.server.directory.name) / 'wedecide.sqlite3'
+        with sqlite3.connect(database) as db:
+            self.assertGreater(db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room['id'],)).fetchone()[0], 0)
+        response = self.delete(host, room)
+        self.assertEqual(response.status_code, 200, response.text)
+        for client in (host, guest):
+            self.assertNotIn(room['id'], [r['id'] for r in client.get('/api/rooms').json()])
+            for suffix in ('', '/messages', '/report', '/provider', '/invite.svg'):
+                self.assertEqual(client.get(f"/api/rooms/{room['id']}{suffix}").status_code, 404)
+        self.assertEqual(host.get(f"/api/rooms/{room['code']}").status_code, 404)
+        self.assertEqual(host.get(f"/api/display/{room['share_token']}").status_code, 404)
+        self.assertEqual(host.get(f"/api/rooms/{other['id']}").status_code, 200)
+        self.assertIsNotNone(host.get('/api/bootstrap').json()['account'])
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room['id'],)).fetchone()[0], 0)
+
+    def test_member_cannot_delete_host_room(self):
+        host, guest, room = self.pair()
+        self.assertEqual(self.delete(guest, room).status_code, 403)
+        self.assertEqual(host.get(f"/api/rooms/{room['id']}").status_code, 200)
+
+    def test_delete_rejects_stale_confirmation(self):
+        host, room = self.room()
+        fresh = self.action(host, room, 'preference', preference_version=0, preference={})
+        self.assertEqual(self.delete(host, room).status_code, 409)
+        self.assertEqual(host.get(f"/api/rooms/{room['id']}").status_code, 200)
+        self.assertEqual(self.delete(host, fresh).status_code, 200)
+
+    def test_host_can_delete_during_vote_or_after_finish(self):
+        for phase in ('voting', 'finished'):
+            with self.subTest(phase=phase):
+                host, room = self.room()
+                if phase == 'voting':
+                    room = self.action(host, room, 'preference', preference_version=0, preference={})
+                    room = self.action(host, room, 'analyze')
+                    proposal = next(p for p in room['proposals'] if p['evaluation']['status'] == 'FEASIBLE')
+                    room = self.action(host, room, 'select', proposal_id=proposal['id'])
+                    room = self.action(host, room, 'start_vote')
+                else:
+                    room = self.action(host, room, 'finish', outcome='CANCELLED', explanation='创建错误')
+                self.assertEqual(self.delete(host, room).status_code, 200)
+                self.assertEqual(host.get(f"/api/rooms/{room['id']}").status_code, 404)
+
+    def test_delete_notifies_connected_member_and_closes_stream(self):
+        host, guest, room = self.pair()
+        with guest.stream('GET', f"/api/rooms/{room['id']}/events") as response:
+            self.assertEqual(response.status_code, 200)
+            lines = response.iter_lines()
+            self.assertEqual(next(lines), 'event: change')
+            self.assertEqual(self.delete(host, room).status_code, 200)
+            remaining = list(lines)
+        self.assertIn('event: deleted', remaining)
+        self.assertEqual(guest.get(f"/api/rooms/{room['id']}").status_code, 404)
 
     def test_join_waits_for_host_approval(self):
         host, room = self.room()
