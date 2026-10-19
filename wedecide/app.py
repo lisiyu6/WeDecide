@@ -68,7 +68,7 @@ async def maintenance():
                 if not room:
                     continue
                 changed = domain.tick(room)
-                if room["state"] not in domain.TERMINAL and time.time() - room["updated"] > config["room_idle_hours"] * 3600:
+                if not changed and room["state"] not in domain.TERMINAL | {"VOTING"} and time.time() - room["updated"] > config["room_idle_hours"] * 3600:
                     if room["vote"] and room["vote"]["status"] == "OPEN":
                         room["vote"].update(status="CANCELLED", finished=time.time())
                     room["state"] = "CANCELLED"
@@ -299,22 +299,23 @@ async def room_ai(key: str, data: AIInput, request: Request):
     return {"queued": True}
 
 
+async def bounded_call(key, operation, timeout=240):
+    domain.require(key not in coordinator.pending, "这个请求仍在处理中", 429)
+    domain.require(len(coordinator.pending) < store.settings()["ai_queue_limit"], "AI 队列已满", 429)
+    coordinator.pending[key] = asyncio.current_task()
+    try:
+        return await asyncio.wait_for(coordinator.run(operation), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "第三方请求超时，请重试") from None
+    finally:
+        coordinator.pending.pop(key, None)
+
+
 @app.post("/api/scenario")
 async def scenario_draft(data: AIInput, request: Request):
     uid = authenticated(request)
-    domain.require(("scenario", uid) not in coordinator.pending, "场景草稿正在生成", 429)
-    domain.require(len(coordinator.pending) < store.settings()["ai_queue_limit"], "AI 队列已满", 429)
-    # A synchronous response is convenient on the creation form, but is still
-    # subject to the same concurrency gate and queue bound as room requests.
-    task = asyncio.current_task()
-    coordinator.pending[("scenario", uid)] = task
-    try:
-        result = await asyncio.wait_for(coordinator.run(lambda: ai.complete(store.settings(), None, uid, "scenario", data.text)), timeout=240)
-        return {"text": result[0], **result[1]}
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "场景生成超时，请重试") from None
-    finally:
-        coordinator.pending.pop(("scenario", uid), None)
+    result = await bounded_call(("scenario", uid), lambda: ai.complete(store.settings(), None, uid, "scenario", data.text))
+    return {"text": result[0], **result[1]}
 
 
 @app.get("/api/rooms/{key}/provider")
@@ -329,6 +330,7 @@ async def room_provider(key: str, request: Request):
 async def save_provider(key: str, request: Request):
     uid = authenticated(request)
     data = await request.json()
+    domain.require(isinstance(data, dict), "请求内容必须为 JSON 对象")
     with store.transaction() as db:
         room = get_room(db, key)
         domain.host(room, uid)
@@ -338,6 +340,7 @@ async def save_provider(key: str, request: Request):
         selected = str(data.get("provider_id", ""))[:48]
         domain.require(not selected or any(p["id"] == selected and p["enabled"] for p in config["providers"]), "全局接口不存在或已停用")
         room["provider_id"] = selected
+        domain.require(data.get("provider") is None or isinstance(data["provider"], dict), "供应商配置必须为 JSON 对象")
         room["provider"] = ai.merge_provider(data["provider"], room["provider"]) if data.get("provider") else None
         domain.event(room, "provider_changed", "房主更新了房间 AI 接口配置")
         store.save_room(db, room)
@@ -352,7 +355,7 @@ async def room_models(key: str, request: Request):
     domain.host(room, uid)
     provider = ai.resolve_provider(store.settings(), room)
     domain.require(provider is not None, "请先保存可用接口")
-    return {"models": await ai.discover_models(provider)}
+    return {"models": await bounded_call(("models", uid), lambda: ai.discover_models(provider))}
 
 
 @app.get("/api/rooms/{key}/invite.svg")
@@ -433,6 +436,7 @@ async def admin_settings(request: Request):
 async def admin_save(request: Request):
     authenticated(request, True)
     data = await request.json()
+    domain.require(isinstance(data, dict), "请求内容必须为 JSON 对象")
     with store.transaction() as db:
         config = store.settings(db)
         domain.require(data.get("revision") == config["revision"], "管理员配置已在另一页面更新，请重新登录页面后再保存", 409)
@@ -444,6 +448,7 @@ async def admin_save(request: Request):
         domain.require(config["ai_queue_limit"] >= config["ai_concurrency"], "AI 队列上限不能小于并发数")
         providers = data.get("providers", config["providers"])
         domain.require(isinstance(providers, list) and len(providers) <= 16, "最多配置 16 个全局接口")
+        domain.require(all(isinstance(p, dict) for p in providers), "每个供应商必须是 JSON 对象")
         old = {p["id"]: p for p in config["providers"]}
         config["providers"] = [ai.merge_provider(p, old.get(p.get("id"))) for p in providers]
         domain.require(len({p["id"] for p in config["providers"]}) == len(providers), "供应商 ID 不能重复")
@@ -460,10 +465,10 @@ async def admin_save(request: Request):
 
 @app.post("/api/admin/providers/{provider_id}/models")
 async def admin_models(provider_id: str, request: Request):
-    authenticated(request, True)
+    uid = authenticated(request, True)
     provider = next((p for p in store.settings()["providers"] if p["id"] == provider_id), None)
     domain.require(provider is not None, "请先保存接口")
-    return {"models": await ai.discover_models(provider)}
+    return {"models": await bounded_call(("models", uid), lambda: ai.discover_models(provider))}
 
 
 @app.get("/api/admin/rooms")

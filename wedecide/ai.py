@@ -75,6 +75,16 @@ def substitute(value, variables):
     return value
 
 
+def contains_messages(value):
+    if isinstance(value, str):
+        return value == "$messages"
+    if isinstance(value, dict):
+        return any(contains_messages(v) for v in value.values())
+    if isinstance(value, list):
+        return any(contains_messages(v) for v in value)
+    return False
+
+
 def extract_path(value, path):
     for part in path.split("."):
         value = value[int(part)] if isinstance(value, list) else value[part]
@@ -97,7 +107,7 @@ async def request(provider, system, messages):
     elif provider["protocol"] == "custom":
         variables = {"$model": provider["model"], "$system": system, "$messages": [{"role": "system", "content": system}, *messages], "$conversation": messages, "$input": messages[-1]["content"], "$max_tokens": provider["max_tokens"], "$temperature": provider["temperature"]}
         template = provider.get("request_template")
-        if not template or "$messages" not in json.dumps(template):
+        if not template or not contains_messages(template):
             raise AIError("自定义请求模板必须含 $messages，确保系统上下文被传递")
         body = substitute(template, variables)
         path = provider["response_path"]

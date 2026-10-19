@@ -19,6 +19,10 @@ def evaluate(room, itinerary, fairness=None, members=None):
     upper = (sum((r["cost_upper"] if r["cost_upper"] is not None else r["cost"]) + r["fixed_cost"] / max(1, count) for r in resources) + transfers * rules["transfer_cost"]) if known_cost else None
     start, end = itinerary[0]["start"], itinerary[-1]["end"]
     violations, unknown = [], []
+    if not room["scenario"].get("city", "").strip():
+        unknown.append("活动城市尚未确认")
+    if not room["scenario"].get("date"):
+        unknown.append("活动日期尚未确认")
     if not count:
         unknown.append("尚无有效成员")
     if not known_cost:

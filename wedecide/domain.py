@@ -183,6 +183,7 @@ def mutate(room, user_id, action, payload, revision, limits):
         editable(room)
         values = payload.get("resources", [])
         require(isinstance(values, list) and len(values) <= 20, "候选活动最多 20 个")
+        require(all(isinstance(v, dict) for v in values), "每个候选活动必须是 JSON 对象")
         resources = [Resource(**v).model_dump() for v in values]
         for r in resources:
             r["id"] = r["id"] or new_id()

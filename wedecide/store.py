@@ -31,6 +31,7 @@ def connect():
 
 
 def init():
+    os.umask(0o077)
     DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
