@@ -232,6 +232,7 @@ document.addEventListener('input',event=>{
  if(state.room)state.formRevisions[formId(form)]??=state.room.revision;
  if(formId(form)==='preference-form'){
    state.prefDraft={preference:readPreference(form),preference_version:state.prefDraft?.preference_version??state.room.me.preference_version,step:state.prefStep||0};saveDraft(draftKey(),state.prefDraft);
+   const badge=$('[data-pref-badge]');if(badge){badge.textContent='草稿 · 待你确认';badge.classList.remove('good');}
  }else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
  else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
  else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;$('#fairness-label').textContent=`${event.target.value}%`;}
