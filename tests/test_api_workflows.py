@@ -1,6 +1,6 @@
 """Black-box regressions against an isolated real server and a local AI fixture."""
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -213,7 +213,7 @@ class ApiWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         room = host.get(f"/api/rooms/{room['id']}").json()
         database = Path(self.server.directory.name) / 'wedecide.sqlite3'
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db:
             self.assertGreater(db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room['id'],)).fetchone()[0], 0)
         response = self.delete(host, room)
         self.assertEqual(response.status_code, 200, response.text)
@@ -225,7 +225,7 @@ class ApiWorkflowTests(unittest.TestCase):
         self.assertEqual(host.get(f"/api/display/{room['share_token']}").status_code, 404)
         self.assertEqual(host.get(f"/api/rooms/{other['id']}").status_code, 200)
         self.assertIsNotNone(host.get('/api/bootstrap').json()['account'])
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room['id'],)).fetchone()[0], 0)
 
     def test_member_cannot_delete_host_room(self):

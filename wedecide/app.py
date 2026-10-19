@@ -212,6 +212,20 @@ async def room_state(key: str, request: Request):
     return result
 
 
+@app.delete("/api/rooms/{key}")
+async def delete_room(key: str, revision: int, request: Request):
+    uid = authenticated(request)
+    with store.transaction() as db:
+        room = get_room(db, key)
+        domain.host(room, uid)
+        domain.require(revision == room["revision"], "空间已更新，请核对最新内容后重新删除", 409)
+        # Messages cascade; preferences, votes and private provider live in the room document.
+        db.execute("DELETE FROM rooms WHERE id=?", (room["id"],))
+    hub.delete_room(room["id"])
+    await coordinator.cancel_room(room["id"])
+    return {"ok": True}
+
+
 @app.post("/api/rooms/{key}/actions")
 async def room_action(key: str, data: Mutation, request: Request):
     uid = authenticated(request)
@@ -241,8 +255,11 @@ async def events(key: str, request: Request):
                 if not store.session(request.cookies.get("wd_session")):
                     break
                 try:
-                    await asyncio.wait_for(queue.get(), timeout=20)
+                    notification = await asyncio.wait_for(queue.get(), timeout=20)
                     if hub.closing:
+                        break
+                    if notification is None:
+                        yield "event: deleted\ndata: {}\n\n"
                         break
                     yield "event: change\ndata: {}\n\n"
                 except asyncio.TimeoutError:

@@ -35,3 +35,21 @@ class RoomCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replies, [('retained', None)])
         self.assertFalse(coordinator.pending)
         self.assertEqual(coordinator.running, 0)
+
+    async def test_deleting_room_also_releases_ai_cancelled_before_start(self):
+        coordinator = Coordinator()
+        self.addAsyncCleanup(coordinator.close)
+        invoked = []
+
+        async def operation():
+            invoked.append('started')
+
+        async def completed(result, error):
+            invoked.append('completed')
+
+        with patch('wedecide.ai.store.settings', return_value={'ai_concurrency': 1, 'ai_queue_limit': 8}):
+            coordinator.submit(('deleted', 'member'), operation, completed)
+            await coordinator.cancel_room('deleted')
+        self.assertFalse(coordinator.pending)
+        self.assertFalse(invoked)
+        self.assertEqual(coordinator.running, 0)

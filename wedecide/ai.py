@@ -340,6 +340,16 @@ class Coordinator:
                 self.pending.pop(key, None)
         self.pending[key] = asyncio.create_task(work())
 
+    async def cancel_room(self, room_id):
+        tasks = [task for key, task in self.pending.items() if key[0] == room_id]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # A queued task cancelled before its first instruction cannot run its finally block.
+        for key, task in list(self.pending.items()):
+            if key[0] == room_id and task.done():
+                self.pending.pop(key, None)
+
     async def close(self):
         tasks = list(self.pending.values())
         for task in tasks:

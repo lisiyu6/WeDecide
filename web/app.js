@@ -5,10 +5,34 @@ import {readProvider,installProviderModels,renderProviderModels} from './provide
 import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep} from './preferences.js';
 
 const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',prefDraft:null,simFairness:null,menu:false,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
-let stream=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
+let stream=null,deletingRoom=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
 const roomPath=suffix=>`/api/rooms/${encodeURIComponent(state.room.id)}${suffix}`;
 const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
 const chatKey=()=>`wd-chat:${state.room.id}:${state.room.me.id}:${state.chatMode}`;
+function leaveDeletedRoom(room,message='房主已删除这个空间，已返回首页') {
+ deleteDraft(`wd-pref:${room.id}:${room.me.id}`);
+ for(const mode of ['private','shared'])deleteDraft(`wd-chat:${room.id}:${room.me.id}:${mode}`);
+ if(state.room?.id!==room.id)return;
+ stream?.close();stream=null;
+ $('#dialog')?.close();state.room=null;state.messages=[];state.prefDraft=null;state.provider=null;state.chatRaw='';
+ navigate('/');toast(message);
+}
+function deleteCurrentRoom() {
+ const room=state.room,version=routeVersion;
+ confirmAction(`删除「${room.scenario.title}」？`,'这个空间的全部成员、消息、需求、方案、投票记录和专用接口配置将永久删除。删除后，所有成员都会离开这个空间。',async()=>{
+   if(version!==routeVersion||state.room?.id!==room.id)throw new Error('页面已切换，请重新打开删除窗口');
+   deletingRoom=room.id;stream?.close();stream=null;
+   try{
+     await api(`/api/rooms/${encodeURIComponent(room.id)}?revision=${room.revision}`,{method:'DELETE'});
+   }catch(error){
+     deletingRoom=null;
+     if(version===routeVersion){await refresh(true);if(state.room?.id===room.id)connect();}
+     if(error.status===409)$('#dialog')?.close();
+     throw error;
+   }finally{if(deletingRoom===room.id)deletingRoom=null;}
+   leaveDeletedRoom(room,'决策空间已删除');
+ },{danger:true,confirmLabel:'确认删除空间'});
+}
 function accountNext(value='/'){try{const url=new URL(value,location.origin);return url.origin===location.origin&&!['/login','/admin'].includes(url.pathname)?url.pathname+url.search:'/';}catch{return '/';}}
 function showAccount(next,mode=null){state.route='auth';state.room=null;state.authNext=accountNext(next);state.authMode=mode||(state.bootstrap.has_legacy_rooms?'register':'login');render();}
 function render(preserve=false) {
@@ -55,7 +79,7 @@ async function refresh(preserve=true) {
    }
    render(preserve&&(state.tab!=='vote'||sameVote));
  }catch(error){
-   if(version===routeVersion&&error.status===404){stream?.close();state.route='home';state.room=null;const rooms=await api('/api/rooms');if(version===routeVersion){state.rooms=rooms;render();toast(error.message,true);}}
+   if(version===routeVersion&&error.status===404){if(deletingRoom!==key)leaveDeletedRoom(state.room);}
    else if(version===routeVersion)toast(error.message,true);
  }finally{refreshing=false;if(refreshAgain){refreshAgain=false;void refresh(preserve);}}
 }
@@ -65,6 +89,7 @@ function connect() {
  stream=new EventSource(`/api/rooms/${encodeURIComponent(key)}/events`);
  stream.onopen=()=>{if(version===routeVersion){state.connected=true;const el=$('.connection');if(el){el.classList.remove('off');el.innerHTML='<i class="online-dot on"></i>实时同步';}}};
  stream.addEventListener('change',()=>{if(version===routeVersion)void refresh(true);});
+ stream.addEventListener('deleted',()=>{if(version===routeVersion&&deletingRoom!==key)leaveDeletedRoom(state.room);});
  stream.onerror=()=>{if(version===routeVersion){state.connected=false;const el=$('.connection');if(el){el.classList.add('off');el.textContent='连接中断 · 自动重连';}}};
 }
 async function route() {
@@ -156,6 +181,7 @@ const handlers={
  'delete-resource':el=>confirmAction('移除这个候选活动','相关候选方案会失效，并按最新资源重新分析。',()=>mutate('resources',{resources:state.room.resources.filter(r=>r.id!==el.dataset.id)})),
  'display':()=>window.open(`/display/${encodeURIComponent(state.room.share_token)}`,'_blank','noopener'),
  'print':()=>window.print(),
+ 'delete-room':()=>deleteCurrentRoom(),
  'finish':()=>dialog('结束并留下记录',`<form id="finish-form" class="stack">${select('结束原因','outcome','CANCELLED',[['CANCELLED','主动结束本次决策'],['NO_CONSENSUS','有方案，但未形成共识'],['NO_FEASIBLE_PROPOSAL','当前范围内没有可行方案'],['INSUFFICIENT_DATA','信息不足，无法判断']])}${textarea('给这次讨论留一句说明','explanation','','rows="3" maxlength="1000" required')}<button type="submit" class="button danger">确认结束</button></form>`),
 };
 

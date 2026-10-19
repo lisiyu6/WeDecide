@@ -36,6 +36,13 @@ class Hub:
             if not queue.full():
                 queue.put_nowait(time.time())
 
+    def delete_room(self, room_id):
+        """Tell only this room's readers it was deleted, then release their queues."""
+        for _, queue in self.listeners.pop(room_id, {}).values():
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(None)
+
     def close(self):
         """Wake every stream, including readers blocked on a quiet room queue."""
         self.closing = True
