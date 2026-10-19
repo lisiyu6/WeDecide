@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Literal
 from urllib.parse import urlsplit
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -52,6 +52,27 @@ class ModelDiscovery(Model):
     provider_id: str | None = Field(default=None, max_length=48)
 
 
+class Criterion(Model):
+    name: str = Field(min_length=1, max_length=80)
+    rating: Literal[0, 50, 100] = 100
+    weight: int = Field(default=3, ge=1, le=5)
+    hard: bool = False
+    scope: Literal["any", "all"] = "any"
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value):
+        if not value.strip():
+            raise ValueError("属性名称不能为空")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def meaningful_constraint(self):
+        if self.hard and self.rating == 50:
+            raise ValueError("都可以不能设为必要条件")
+        return self
+
+
 class Preference(Model):
     budget_max: float | None = Field(default=None, ge=0, le=1000000)
     available_start: int = Field(default=0, ge=0, le=1439)
@@ -65,6 +86,9 @@ class Preference(Model):
     preferred_end: int | None = Field(default=None, ge=1, le=1440)
     time_weight: int = Field(default=3, ge=1, le=5)
     categories: dict[str, Literal[0, 50, 100]] = Field(default_factory=dict)
+    criteria: list[Criterion] = Field(default_factory=list, max_length=12)
+    cost_preference: Literal["neutral", "lower"] = "neutral"
+    discovery: dict[str, Literal["like", "dislike", "neutral", "skip"]] = Field(default_factory=dict, max_length=40)
     activity_weight: int = Field(default=3, ge=1, le=5)
     other: str = Field(default="", max_length=2000)
     unresolved: list[str] = Field(default_factory=list, max_length=20)
@@ -76,6 +100,10 @@ class Preference(Model):
             raise ValueError("可参加的结束时间须晚于开始时间")
         if self.preferred_start is not None and self.preferred_end is not None and self.preferred_end <= self.preferred_start:
             raise ValueError("偏好的结束时间须晚于开始时间")
+        if len({c.name.casefold() for c in self.criteria}) != len(self.criteria):
+            raise ValueError("具体要求名称不能重复")
+        if any(len(key) > 100 for key in self.discovery):
+            raise ValueError("卡片标识过长")
         if any(len(v) > 500 for v in self.notes):
             raise ValueError("每条补充说明不超过 500 字")
         if len(self.categories) > 30 or any(len(v) > 80 for v in [*self.categories, *self.excluded_categories, *self.allowed_locations, *self.unresolved]):
@@ -97,9 +125,12 @@ class Resource(Model):
     source_url: str = Field(default="", max_length=2000)
     confirmed: bool = False
     verified: bool = False
+    attributes: dict[str, StrictBool] = Field(default_factory=dict, max_length=20)
 
     @model_validator(mode="after")
     def coherent(self):
+        if any(not key.strip() or len(key) > 80 for key in self.attributes):
+            raise ValueError("每个属性名称需要 1–80 字")
         if self.end - self.start < self.duration:
             raise ValueError("活动时长超过开放窗口")
         if self.cost is not None and self.cost_upper is not None and self.cost_upper < self.cost:
@@ -116,9 +147,35 @@ class Rules(Model):
     max_rounds: int = Field(default=3, ge=1, le=5)
     vote_seconds: int = Field(default=86400, ge=30, le=604800)
     max_members: int = Field(default=8, ge=1, le=64)
-    max_activities: int = Field(default=2, ge=1, le=2)
+    min_activities: int = Field(default=1, ge=1, le=5)
+    max_activities: int = Field(default=2, ge=1, le=5)
     transfer_minutes: int = Field(default=30, ge=0, le=180)
     transfer_cost: float = Field(default=0, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def activity_range(self):
+        if self.min_activities > self.max_activities:
+            raise ValueError("最少活动数不能超过最多活动数")
+        return self
+
+
+class PlanStep(Model):
+    resource_id: str = Field(min_length=1, max_length=64)
+    start: int = Field(ge=0, le=1439)
+
+
+class ManualPlan(Model):
+    id: str = Field(default="", max_length=64)
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=2000)
+    steps: list[PlanStep] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def distinct_steps(self):
+        if len({step.resource_id for step in self.steps}) != len(self.steps):
+            raise ValueError("同一方案不能重复同个活动")
+        return self
+
 
 class Scenario(Model):
     title: str = Field(min_length=1, max_length=100)

@@ -5,7 +5,7 @@ import time
 from fastapi import HTTPException
 from pydantic import ValidationError
 from . import engine
-from .models import Preference, Resource, Rules, Scenario
+from .models import ManualPlan, Preference, Resource, Rules, Scenario
 from .store import new_id
 
 TERMINAL = {"APPROVED", "NO_CONSENSUS", "NO_FEASIBLE_PROPOSAL", "INSUFFICIENT_DATA", "CANCELLED"}
@@ -41,7 +41,7 @@ def new_room(user_id, data, max_members):
     rules = data.rules.model_dump()
     rules["max_members"] = min(rules["max_members"], max_members)
     now = time.time()
-    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
+    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
     event(room, "created", "房间已创建，等待成员加入并确认各自需求")
     return room
 
@@ -191,6 +191,20 @@ def mutate(room, user_id, action, payload, revision, limits):
         room["resources"] = resources
         room["resource_version"] += 1
         invalidate(room, "房主更新候选活动，所有方案按新数据重新评价")
+    elif action == "plans":
+        host(room, user_id)
+        editable(room)
+        values = payload.get("plans", [])
+        require(isinstance(values, list) and len(values) <= 6, "自定义方案最多 6 个")
+        require(all(isinstance(value, dict) for value in values), "方案必须是 JSON 对象")
+        plans = [ManualPlan(**value).model_dump() for value in values]
+        resources = {resource["id"] for resource in room["resources"]}
+        for plan in plans:
+            plan["id"] = plan["id"] or new_id()
+            require(all(step["resource_id"] in resources for step in plan["steps"]), "自定义方案引用的活动已不存在")
+        require(len({plan["id"] for plan in plans}) == len(plans), "方案标识重复")
+        room["manual_plans"] = plans
+        invalidate(room, "房主更新自定义行程，需按最新条件重新分析")
     elif action == "settings":
         host(room, user_id)
         editable(room)
@@ -333,6 +347,7 @@ def view(room, user_id, online=()):
         return {"id": room["id"], "code": room["code"], "revision": room["revision"], "scenario": {"title": room["scenario"]["title"]}, "state": room["state"], "me": {"id": m["id"], "name": m["name"], "status": m["status"]}}
     r = {k: deepcopy(room[k]) for k in ("id", "code", "revision", "state", "host_id", "created", "updated", "scenario", "rules", "resources", "resource_version", "input_version", "analysis_version", "analysis", "proposals", "history", "selected_id", "round", "events", "result", "provider_id")}
     r["members"] = [{k: deepcopy(x[k]) for k in ("id", "name", "status", "confirmed", "preference_version", "attendance")} | {"online": x["id"] in online} for x in room["members"] if x["status"] == "approved" or user_id == room["host_id"]]
+    r["manual_plans"] = deepcopy(room.get("manual_plans", []))
     r["me"] = deepcopy(m)
     r["vote"] = public_vote(room["vote"], user_id)
     r["vote_history"] = [public_vote(v, user_id) for v in room["vote_history"]]

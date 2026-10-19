@@ -1,11 +1,22 @@
-"""Deterministic one-day, one/two-activity constraint and utility engine."""
-from itertools import permutations
+"""Bounded one-day planning with explicit hard constraints and soft preferences."""
 from statistics import mean
 from .store import new_id
 
 
 def active_members(room):
     return [m for m in room["members"] if m["status"] == "approved"]
+
+
+def attribute_match(resources, criterion):
+    expected = criterion.get("rating", 100) != 0
+    values = []
+    for resource in resources:
+        attributes = {key.casefold(): value for key, value in resource.get("attributes", {}).items()}
+        actual = attributes.get(criterion["name"].casefold())
+        values.append(None if actual is None else actual == expected)
+    if criterion.get("scope", "any") == "all":
+        return False if False in values else None if None in values else True
+    return True if True in values else None if None in values else False
 
 
 def evaluate(room, itinerary, fairness=None, members=None):
@@ -29,6 +40,13 @@ def evaluate(room, itinerary, fairness=None, members=None):
         unknown.append("候选活动缺少费用")
     if any(not r["confirmed"] for r in resources):
         unknown.append("候选数据尚未由房主确认")
+    if not rules.get("min_activities", 1) <= len(resources) <= rules["max_activities"]:
+        violations.append({"member_id": None, "field": "activities", "message": "活动数量不在房间设置的范围内"})
+    if end > 1440:
+        violations.append({"member_id": None, "field": "day", "message": "行程超出同一天的时间范围"})
+    for previous, following in zip(itinerary, itinerary[1:]):
+        if following["start"] < previous["end"] + rules["transfer_minutes"]:
+            violations.append({"member_id": None, "field": "transfer", "message": "活动重叠或预留转场时间不足"})
     for item in itinerary:
         if item["start"] < item["resource"]["start"] or item["end"] > item["resource"]["end"]:
             violations.append({"member_id": None, "field": "opening", "message": "行程超出候选活动开放时间"})
@@ -61,6 +79,21 @@ def evaluate(room, itinerary, fairness=None, members=None):
         if p["budget_target"] is not None:
             b = p["budget_target"]
             score("预算", max(0, 100 - 100 * max(0, cost - b) / max(b, 50)) if cost is not None else None, p["budget_weight"])
+        elif p.get("cost_preference") == "lower":
+            known = [r["cost"] + r["fixed_cost"] / max(1, count) for r in room["resources"] if r["cost"] is not None]
+            scale = max(1, mean(known)) if known else 1
+            score("价格（偏好更低费用）", 100 * scale / (scale + cost) if cost is not None else None, p["budget_weight"])
+        for criterion in p.get("criteria", []):
+            matched = attribute_match(resources, criterion)
+            value = None if matched is None else 100 if matched else 0
+            if criterion.get("rating", 100) == 50:
+                value = 50 if matched is not None else None
+            if criterion.get("hard"):
+                if matched is False:
+                    fail("criteria", "不满足一位成员明确确认的必要属性要求")
+                elif matched is None:
+                    unknown.append("一位成员的必要属性要求缺少候选资料依据")
+            score(criterion["name"], value, criterion.get("weight", 3))
         if p["preferred_start"] is not None:
             score("开始时间", max(0, 100 - max(0, p["preferred_start"] - start) / 60 * 20), p["time_weight"])
         if p["preferred_end"] is not None:
@@ -85,7 +118,7 @@ def evaluate(room, itinerary, fairness=None, members=None):
     avg, minimum = (mean(numbers), min(numbers)) if numbers else (None, None)
     weight = rules["fairness"] if fairness is None else fairness
     group = (1 - weight) * avg + weight * minimum if numbers else None
-    return {"status": "INFEASIBLE" if violations else "UNKNOWN" if unknown else "FEASIBLE", "violations": violations, "unknown": list(dict.fromkeys(unknown)), "cost": round(cost, 2) if cost is not None else None, "cost_upper": round(upper, 2) if upper is not None else None, "start": start, "end": end, "utilities": utilities, "average": round(avg, 2) if avg is not None else None, "minimum": round(minimum, 2) if minimum is not None else None, "score": round(group, 2) if group is not None else None, "coverage": [len(numbers), count], "partial": len(numbers) != count or any(u["coverage"][0] < u["coverage"][1] for u in utilities), "source_status": "VERIFIED_BY_ORGANIZER" if all(r["verified"] for r in resources) else "USER_PROVIDED" if all(r["confirmed"] for r in resources) else "UNCONFIRMED"}
+    return {"status": "INFEASIBLE" if violations else "UNKNOWN" if unknown else "FEASIBLE", "violations": violations, "unknown": list(dict.fromkeys(unknown)), "cost": round(cost, 2) if cost is not None else None, "cost_upper": round(upper, 2) if upper is not None else None, "start": start, "end": end, "utilities": utilities, "average": round(avg, 2) if avg is not None else None, "minimum": round(minimum, 2) if minimum is not None else None, "score": round(group, 2) if group is not None else None, "coverage": [len(numbers), count], "partial": len(numbers) != count or any(u["coverage"][0] < u["coverage"][1] for u in utilities), "duration": end - start, "transfers": transfers, "wait_minutes": sum(max(0, following["start"] - previous["end"] - rules["transfer_minutes"]) for previous, following in zip(itinerary, itinerary[1:])), "cost_breakdown": {"activities": round(sum(r["cost"] for r in resources), 2) if known_cost else None, "shared": round(sum(r["fixed_cost"] for r in resources) / max(1, count), 2), "transfer": round(transfers * rules["transfer_cost"], 2), "people": count}, "source_status": "VERIFIED_BY_ORGANIZER" if all(r["verified"] for r in resources) else "USER_PROVIDED" if all(r["confirmed"] for r in resources) else "UNCONFIRMED"}
 
 
 def rank_key(proposal):
@@ -94,54 +127,90 @@ def rank_key(proposal):
 
 
 def generate(room):
-    resources, members = room["resources"], active_members(room)
-    rules = room["rules"]
+    resources, members, rules = room["resources"], active_members(room), room["rules"]
     prefs = [m["preference"] for m in members if m.get("preference")]
     hard_start = max((p["available_start"] for p in prefs), default=0)
-    candidates = []
-    considered = 0
-    for length in range(1, min(len(resources), rules["max_activities"]) + 1):
-        for sequence in permutations(resources, length):
-            duration = sum(r["duration"] for r in sequence) + (length - 1) * rules["transfer_minutes"]
-            starts = {sequence[0]["start"], max(sequence[0]["start"], hard_start)}
-            for p in prefs:
-                if p["preferred_start"] is not None:
-                    starts.add(max(sequence[0]["start"], hard_start, p["preferred_start"]))
-                if p["preferred_end"] is not None:
-                    starts.add(max(sequence[0]["start"], hard_start, p["preferred_end"] - duration))
-            # Align the first activity to later activities' opening times to avoid
-            # artificial idle time causing duration/time constraints to fail.
-            offset = 0
-            for resource in sequence:
-                starts.add(max(sequence[0]["start"], hard_start, resource["start"] - offset))
-                offset += resource["duration"] + rules["transfer_minutes"]
-            best = None
-            for start in sorted(starts):
-                itinerary, cursor = [], start
-                for resource in sequence:
-                    cursor = max(cursor, resource["start"])
-                    itinerary.append({"resource": resource, "start": cursor, "end": cursor + resource["duration"]})
-                    cursor += resource["duration"] + rules["transfer_minutes"]
-                if itinerary[-1]["end"] > 1440:
+    candidates, considered, bounded = {}, 0, False
+    combinations, feasible_count = 0, 0
+    beam = [()]
+    max_depth = min(len(resources), rules["max_activities"])
+    for length in range(1, max_depth + 1):
+        stage, used = [], 0
+        for prefix in beam:
+            for resource in resources:
+                if any(item["id"] == resource["id"] for item in prefix):
                     continue
-                considered += 1
-                proposal = {"title": " + ".join(r["name"] for r in sequence), "itinerary": itinerary, "evaluation": evaluate(room, itinerary)}
-                if best is None or rank_key(proposal) < rank_key(best):
-                    best = proposal
-            if best:
-                candidates.append(best)
-    candidates.sort(key=rank_key)
-    chosen, seen = [], set()
-    for p in candidates:
-        signature = tuple(sorted(i["resource"]["id"] for i in p["itinerary"]))
-        if signature in seen:
+                sequence = (*prefix, resource)
+                duration = sum(r["duration"] for r in sequence) + (length - 1) * rules["transfer_minutes"]
+                starts = {sequence[0]["start"], max(sequence[0]["start"], hard_start)}
+                for preference in prefs:
+                    if preference["preferred_start"] is not None:
+                        starts.add(max(sequence[0]["start"], hard_start, preference["preferred_start"]))
+                    if preference["preferred_end"] is not None:
+                        starts.add(max(sequence[0]["start"], hard_start, preference["preferred_end"] - duration))
+                offset = 0
+                for item in sequence:
+                    starts.add(max(sequence[0]["start"], hard_start, item["start"] - offset))
+                    offset += item["duration"] + rules["transfer_minutes"]
+                if len(starts) > 12:
+                    bounded = True
+                best = None
+                for start in sorted(starts)[:12]:
+                    if used >= 2000:
+                        bounded = True
+                        break
+                    itinerary, cursor = [], start
+                    for item in sequence:
+                        cursor = max(cursor, item["start"])
+                        itinerary.append({"resource": item, "start": cursor, "end": cursor + item["duration"]})
+                        cursor += item["duration"] + rules["transfer_minutes"]
+                    used += 1
+                    considered += 1
+                    proposal = {"title": " + ".join(r["name"] for r in sequence), "itinerary": itinerary, "evaluation": evaluate(room, itinerary)}
+                    if best is None or rank_key(proposal) < rank_key(best):
+                        best = proposal
+                if best:
+                    combinations += 1
+                    stage.append((sequence, best))
+                    if len(stage) > 96:
+                        stage.sort(key=lambda value: rank_key(value[1]))
+                        stage = stage[:48]
+                        bounded = True
+                    if length >= rules.get("min_activities", 1):
+                        feasible_count += best["evaluation"]["status"] == "FEASIBLE"
+                        signature = tuple(sorted(item["resource"]["id"] for item in best["itinerary"]))
+                        previous = candidates.get(signature)
+                        if previous is None or rank_key(best) < rank_key(previous):
+                            candidates[signature] = best
+                        if len(candidates) > 12:
+                            worst = max(candidates, key=lambda key: rank_key(candidates[key]))
+                            del candidates[worst]
+                if used >= 2000:
+                    break
+            if used >= 2000:
+                break
+        stage.sort(key=lambda value: rank_key(value[1]))
+        if len(stage) > 48 and length < max_depth:
+            bounded = True
+        beam = [sequence for sequence, _ in stage[:48]]
+    chosen = sorted(candidates.values(), key=rank_key)[:6]
+    by_id = {resource["id"]: resource for resource in resources}
+    warnings = []
+    for plan in room.get("manual_plans", []):
+        if any(step["resource_id"] not in by_id for step in plan["steps"]):
+            warnings.append(f"自定义方案「{plan['title']}」引用了已移除的活动，请重新编辑")
             continue
-        seen.add(signature)
-        p.update(id=new_id(), version=room["analysis_version"] + 1, input_version=room["input_version"])
-        chosen.append(p)
-        if len(chosen) == 3:
-            break
-    return {"proposals": chosen, "considered": considered, "resource_combinations": len(candidates), "scope": f"单日 1–{rules['max_activities']} 项活动；在开放时间、共同可用时间和偏好时间边界安排，未搜索任意多活动行程", "feasible_count": sum(p["evaluation"]["status"] == "FEASIBLE" for p in candidates)}
+        itinerary = [{"resource": by_id[step["resource_id"]], "start": step["start"], "end": step["start"] + by_id[step["resource_id"]]["duration"]} for step in plan["steps"]]
+        proposal = {"title": plan["title"], "description": plan["description"], "plan_id": plan["id"], "itinerary": itinerary, "evaluation": evaluate(room, itinerary)}
+        chosen.append(proposal)
+        feasible_count += proposal["evaluation"]["status"] == "FEASIBLE"
+        combinations += 1
+        considered += 1
+    chosen.sort(key=rank_key)
+    for index, proposal in enumerate(chosen):
+        proposal.update(id=new_id(), code=chr(65 + index), version=room["analysis_version"] + 1, input_version=room["input_version"])
+    scope = f"单城市单日，最少 {rules.get('min_activities', 1)}、最多 {rules['max_activities']} 项活动；每层最多 2000 个时间安排、保留 48 条路径，另评价房主自定义行程。有限搜索不保证全局最优。"
+    return {"proposals": chosen, "considered": considered, "resource_combinations": combinations, "scope": scope, "bounded": bounded, "warnings": warnings, "feasible_count": feasible_count}
 
 
 def demo_resources():
