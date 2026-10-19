@@ -1,0 +1,28 @@
+[Unit]
+Description=WeDecide collaborative decision workspace
+After=network.target
+
+[Service]
+Type=simple
+User=wedecide
+Group=wedecide
+WorkingDirectory=/opt/wedecide
+Environment=WEDECIDE_DATA_DIR=/var/lib/wedecide
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-/etc/wedecide.env
+ExecStart=/opt/wedecide/.venv/bin/python -m wedecide.cli serve
+Restart=on-failure
+RestartSec=3
+StateDirectory=wedecide
+UMask=0077
+MemoryHigh=400000000
+MemoryMax=500000000
+TasksMax=64
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wedecide
+
+[Install]
+WantedBy=multi-user.target

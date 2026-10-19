@@ -7,7 +7,7 @@ name = "wedecide"
 version = "0.1.0"
 description = "A lightweight, human-in-the-loop group decision workspace"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "qrcode>=8,<9"]
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "qrcode>=8,<9", "pydantic>=2.9,<3"]
 
 [project.scripts]
 wedecide = "wedecide.cli:main"

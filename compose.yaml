@@ -1,0 +1,23 @@
+services:
+  wedecide:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${WEDECIDE_BIND_ADDRESS:-0.0.0.0}:8000:8000"
+    environment:
+      WEDECIDE_PUBLIC_URL: ${WEDECIDE_PUBLIC_URL:-}
+      WEDECIDE_ALLOWED_ORIGINS: ${WEDECIDE_ALLOWED_ORIGINS:-}
+      WEDECIDE_SECURE_COOKIE: ${WEDECIDE_SECURE_COOKIE:-false}
+    volumes:
+      - wedecide-data:/app/data
+    mem_limit: 500000000
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  wedecide-data:

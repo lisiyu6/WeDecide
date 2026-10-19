@@ -1,0 +1,11 @@
+# 替换为指向服务器的真实域名；Caddy 自动申请 HTTPS 证书。
+decide.example.com {
+    encode zstd gzip
+    request_body {
+        max_size 128KB
+    }
+    reverse_proxy 127.0.0.1:8000 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
