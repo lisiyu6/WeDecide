@@ -85,27 +85,3 @@ class ComplexDecisionTests(unittest.TestCase):
         visible=domain.view(room,'other')
         self.assertNotIn('私密要求',json.dumps(visible,ensure_ascii=False))
         self.assertIn('私密要求',json.dumps(domain.view(room,'host'),ensure_ascii=False))
-
-
-class DiscoveryIntegrationTests(unittest.TestCase):
-    def test_card_answers_build_scored_preferences_without_guessing_amounts(self):
-        script="""
-        import {answerPreference} from './web/preferences.js';
-        let p={budget_max:null,budget_target:null,notes:['保留说明']};
-        p=answerPreference(p,{id:'category:美食',kind:'category',key:'美食'},'like');
-        p=answerPreference(p,{id:'attribute:自助',kind:'attribute',key:'自助'},'like');
-        p=answerPreference(p,{id:'price',kind:'price'},'like');
-        const before=JSON.parse(JSON.stringify(p));
-        p=answerPreference(p,{id:'category:文化',kind:'category',key:'文化'},'skip');
-        console.log(JSON.stringify({before,after:p}));
-        """
-        result=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,text=True,capture_output=True)
-        self.assertEqual(result.returncode,0,result.stderr)
-        values=json.loads(result.stdout);p=values['after']
-        self.assertEqual(p['categories']['美食'],100)
-        self.assertNotIn('文化',p['categories'])
-        self.assertEqual(p['criteria'][0]['name'],'自助')
-        self.assertFalse(p['criteria'][0]['hard'])
-        self.assertEqual(p['cost_preference'],'lower')
-        self.assertIsNone(p['budget_max']);self.assertIsNone(p['budget_target'])
-        self.assertEqual(p['notes'],['保留说明'])

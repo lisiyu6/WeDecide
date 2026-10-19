@@ -107,6 +107,12 @@ class ProviderFixture(BaseHTTPRequestHandler):
             return self.respond(400, {'error': 'missing model or messages'})
         time.sleep(.15)
         content = '本地接口回归回复'
+        if 'Interview JSON Schema' in body['messages'][0]['content']:
+            last=body['messages'][-1]['content']
+            ready='整合' in last
+            content=json.dumps({'question':'' if ready else '你更希望这次活动带来怎样的体验？', 'left':'' if ready else '轻松聊天', 'right':'' if ready else '探索新体验', 'summary':'根据你的回答，优先考虑轻松交流。', 'ready':ready, 'draft':{'categories':{'休闲':100},'criteria':[{'name':'适合聊天','rating':100}], 'cost_preference':'lower'}, 'insights':['预算具体金额由本人填写']},ensure_ascii=False)
+        elif 'Comparison JSON Schema' in body['messages'][0]['content']:
+            content=json.dumps({'summary':'先核对可行方案的行程和未确认资料。','reasons':['根据已提供的行程与费用进行比较'],'risks':['缺失资料需要房主补充'],'next_steps':['本人核对需求后再发起正式投票']},ensure_ascii=False)
         if 'Preference JSON Schema' in body['messages'][0]['content']:
             content = json.dumps({'budget_max': 200, 'notes': ['候选餐厅待补充']}, ensure_ascii=False)
         self.respond(200, {'choices': [{'message': {'role': 'assistant', 'content': content}}]})
@@ -371,6 +377,39 @@ class ApiWorkflowTests(unittest.TestCase):
         report = host.get(f"/api/rooms/{room['id']}/report")
         self.assertEqual(report.status_code, 200, report.text)
         self.assertEqual(report.json()['result']['outcome'], 'APPROVED')
+
+    def test_ai_interview_generates_question_and_draft_without_confirming_member(self):
+        host, guest, room = self.pair()
+        room=self.configure(host,room)
+        path=f"/api/rooms/{room['id']}"
+        response=guest.post(path+'/ai',json={'kind':'interview','text':'请根据本次活动了解我的喜好','request_id':'first','draft':{'other':'想聊聊天'}})
+        self.assertEqual(response.status_code,202,response.text)
+        answer=self.replies(guest,room)[0]
+        self.assertIn('体验',answer['metadata']['interview']['question'])
+        self.assertEqual(answer['metadata']['draft']['criteria'][0]['name'],'适合聊天')
+        self.assertEqual(answer['metadata']['request_id'],'first')
+        self.assertFalse(guest.get(path).json()['me']['confirmed'])
+        self.assertFalse(host.get(path+'/messages').json())
+        response=guest.post(path+'/ai',json={'kind':'interview','text':'请整合当前回答为需求表','draft':answer['metadata']['draft']})
+        self.assertEqual(response.status_code,202,response.text)
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            answers=[m for m in guest.get(path+'/messages').json() if m['role']=='assistant']
+            if len(answers)>=2:break
+            time.sleep(.03)
+        self.assertTrue(answers[-1]['metadata']['interview']['ready'])
+        current=guest.get(path).json()
+        confirmed=self.action(guest,current,'preference',preference_version=0,preference=answers[-1]['metadata']['draft'])
+        self.assertEqual(confirmed['me']['preference']['cost_preference'],'lower')
+        self.assertTrue(confirmed['me']['confirmed'])
+
+    def test_ai_explains_comparison_using_structured_response(self):
+        host,room=self.room()
+        room=self.configure(host,room)
+        response=host.post(f"/api/rooms/{room['id']}/ai",json={'kind':'explain','text':'解释当前方案的差异和缺项'})
+        self.assertEqual(response.status_code,202,response.text)
+        answer=self.replies(host,room)[0]
+        self.assertTrue(answer['metadata']['explanation']['risks'])
 
     def test_incomplete_scenario_cannot_be_marked_feasible(self):
         host, room = self.room(scenario={'title': '资料未齐'})
