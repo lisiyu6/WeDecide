@@ -6,7 +6,7 @@
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET | `/api/bootstrap` | 创建/恢复成员浏览器身份；返回公共容量及供应商名称/模型，不返回密钥和提示词 |
+| GET | `/api/bootstrap` | 创建/恢复会话，返回 `account`（user_id、username）或 null、`has_legacy_rooms`、公共容量及供应商名称/模型 |
 | GET | `/api/rooms` | 当前身份参与的最近房间 |
 | POST | `/api/rooms` | 创建房间，`CreateRoom` 模型 |
 | POST | `/api/join/{code}` | `{"username":"..."}` 提交加入申请，必须房主批准 |
@@ -98,3 +98,12 @@ AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化�
 模型列表标准结构参考：[OpenAI List models](https://developers.openai.com/api/reference/resources/models/methods/list)。第三方实现可通过列表路径和 ID 字段适配。
 
 OpenAI 兼容供应商的 `endpoint` 可填根地址或以 `/v1` 结尾的基址，聊天分别补全 `/v1/chat/completions` 或 `/chat/completions`；完整端点保持原样，模型发现从同一规范地址推导。Anthropic、自定义协议不补全。
+
+
+## 普通账号
+
+- `POST /api/auth/register`：`{"username":"...","password":"..."}`，用户名 1–30 字，密码 6–128 位。绑定当前未注册的会话成员 ID，保留旧房间；用户名重复返回 409。
+- `POST /api/auth/login`：同样的两个字段，设置当前设备的 `wd_session`。重新登录恢复账号的成员 ID，不修改房间成员或房主。
+- `POST /api/auth/logout`：JSON 空对象 `{}`，仅注销当前设备，不结束房间、不注销其他设备。
+- 创建房间和申请加入要求普通账号，未登录返回 401。已有匿名成员仍可访问原房间并注册绑定。
+- 账号名比较进行 Unicode NFKC 与大小写归一化；保存 scrypt 密码哈希。管理员登录接口和账号独立。
