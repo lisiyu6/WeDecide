@@ -30,18 +30,27 @@ async function refresh(preserve=true) {
  try{
    const room=await api(`/api/rooms/${encodeURIComponent(key)}`);
    if(version!==routeVersion)return;
-   const sameVote=room.vote?.id===state.room.vote?.id;
-   state.room=room;
+   let recent=null,provider=state.provider;
    if(room.me.status==='approved'){
-     const recent=await api(`/api/rooms/${encodeURIComponent(key)}/messages`);
-     if(version!==routeVersion)return;
+     const results=await Promise.all([
+       api(`/api/rooms/${encodeURIComponent(key)}/messages`),
+       room.host_id===room.me.id?api(`/api/rooms/${encodeURIComponent(key)}/provider`):Promise.resolve(null)
+     ]);
+     [recent,provider]=results;
+   }
+   if(version!==routeVersion)return;
+   const sameVote=room.vote?.id===state.room.vote?.id;
+   if(!sameVote){state.voteSession=null;state.dirtyForms.delete('vote-form');}
+   state.room=room;state.provider=provider;
+   if(recent){
      const previous=state.messages.filter(m=>recent.length&&m.id<recent[0].id);
      state.messages=[...previous,...recent].slice(-300);
-     if(state.provider===null&&room.host_id===room.me.id)state.provider=await api(`/api/rooms/${encodeURIComponent(key)}/provider`);
    }
-   if(version===routeVersion)render(preserve&&(state.tab!=='vote'||sameVote));
- }catch(error){if(version===routeVersion&&error.status===404){stream?.close();state.route='home';state.room=null;state.rooms=await api('/api/rooms');render();toast(error.message,true);}else if(version===routeVersion)toast(error.message,true);}
- finally{refreshing=false;if(refreshAgain){refreshAgain=false;void refresh(preserve);}}
+   render(preserve&&(state.tab!=='vote'||sameVote));
+ }catch(error){
+   if(version===routeVersion&&error.status===404){stream?.close();state.route='home';state.room=null;const rooms=await api('/api/rooms');if(version===routeVersion){state.rooms=rooms;render();toast(error.message,true);}}
+   else if(version===routeVersion)toast(error.message,true);
+ }finally{refreshing=false;if(refreshAgain){refreshAgain=false;void refresh(preserve);}}
 }
 function connect() {
  stream?.close();if(!state.room)return;
@@ -52,39 +61,50 @@ function connect() {
  stream.onerror=()=>{if(version===routeVersion){state.connected=false;const el=$('.connection');if(el){el.classList.add('off');el.textContent='连接中断 · 自动重连';}}};
 }
 async function route() {
- const version=++routeVersion;stream?.close();stream=null;clearInterval(displayTimer);state.connected=false;state.menu=false;state.dirtyForms.clear();state.formRevisions={};
+ const version=++routeVersion;stream?.close();stream=null;clearInterval(displayTimer);
+ state.connected=false;state.menu=false;state.voteSession=null;state.dirtyForms.clear();state.formRevisions={};
  const url=new URL(location.href),parts=url.pathname.split('/').filter(Boolean);
  try{
-   if(parts[0]==='display'&&parts[1]){state.route='display';await showDisplay(parts[1],version);displayTimer=setInterval(()=>showDisplay(parts[1],version),8000);return;}
-   if(!state.bootstrap)state.bootstrap=await api('/api/bootstrap');
+   if(parts[0]==='display'&&parts[1]){state.route='display';await showDisplay(parts[1],version);if(version===routeVersion)displayTimer=setInterval(()=>showDisplay(parts[1],version),8000);return;}
+   if(!state.bootstrap){const bootstrap=await api('/api/bootstrap');if(version!==routeVersion)return;state.bootstrap=bootstrap;}
    if(version!==routeVersion)return;
-   if(parts[0]==='new') {state.route='new';state.room=null;render();return;}
+   if(parts[0]==='new'){state.route='new';state.room=null;render();return;}
    if(parts[0]==='r'&&parts[1]){
-     state.code=parts[1];state.tab=tabs.some(t=>t[0]===url.searchParams.get('view'))?url.searchParams.get('view'):'overview';
+     const code=parts[1];
+     const tab=tabs.some(t=>t[0]===url.searchParams.get('view'))?url.searchParams.get('view'):'overview';
      const previousRoom=state.room?.id;
-     try{state.room=await api(`/api/rooms/${encodeURIComponent(state.code)}`);}catch(error){if(error.status===403){state.route='join';state.room=null;render();return;}throw error;}
-     if(version!==routeVersion)return;
-     state.route='room';
-     if(previousRoom!==state.room.id){state.messages=[];state.provider=null;state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());}
-     state.chatRaw=loadDraft(chatKey())||'';
-     if(state.room.me.status==='approved'){
-       state.messages=await api(roomPath('/messages'));state.hasOlder=state.messages.length===50;
-       if(state.room.host_id===state.room.me.id)state.provider=await api(roomPath('/provider'));
+     let room;
+     try{room=await api(`/api/rooms/${encodeURIComponent(code)}`);}catch(error){
+       if(version!==routeVersion)return;
+       if(error.status===403){state.route='join';state.code=code;state.room=null;render();return;}
+       throw error;
      }
      if(version!==routeVersion)return;
+     let messages=[],provider=null;
+     if(room.me.status==='approved'){
+       [messages,provider]=await Promise.all([
+         api(`/api/rooms/${encodeURIComponent(room.id)}/messages`),
+         room.host_id===room.me.id?api(`/api/rooms/${encodeURIComponent(room.id)}/provider`):Promise.resolve(null)
+       ]);
+     }
+     if(version!==routeVersion)return;
+     state.code=code;state.tab=tab;state.room=room;state.route='room';state.messages=messages;state.provider=provider;state.hasOlder=messages.length===50;
+     if(previousRoom!==room.id){state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());}
+     state.chatRaw=loadDraft(chatKey())||'';
      render();connect();return;
    }
-   state.route='home';state.room=null;state.rooms=await api('/api/rooms');if(version===routeVersion)render();
+   const rooms=await api('/api/rooms');if(version!==routeVersion)return;
+   state.route='home';state.room=null;state.rooms=rooms;render();
  }catch(error){if(version!==routeVersion)return;$('#app').innerHTML=`<div class="waiting">${logo}<div class="card">${empty('暂时没有打开这个空间',error.message,'<a href="/" data-nav class="button secondary">返回首页</a>')}</div></div>`;}
 }
 function navigate(url) {history.pushState({},'',url);void route();window.scrollTo(0,0);}
 async function mutate(action,payload={},revision=null) {
- const current=state.room.id;
+ const current=state.room.id,version=routeVersion;
  try{
    const r=await post(roomPath('/actions'),{revision:revision??state.room.revision,action,payload});
-   if(state.room?.id===current){state.room={...r,ai_pending:state.room.ai_pending};state.dirtyForms.clear();state.formRevisions={};render();await refresh(false);}
+   if(state.room?.id===current&&version===routeVersion){state.room={...r,ai_pending:state.room.ai_pending};state.dirtyForms.clear();state.formRevisions={};render();await refresh(false);}
    return r;
- }catch(error){if(error.status===409)await refresh(true);throw error;}
+ }catch(error){if(error.status===409&&version===routeVersion)await refresh(true);throw error;}
 }
 const csv=value=>value.split(/[,，\n]/).map(s=>s.trim()).filter(Boolean);
 function readPreference(form) {

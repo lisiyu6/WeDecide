@@ -286,6 +286,8 @@ def mutate(room, user_id, action, payload, revision, limits):
         require(room["state"] != "VOTING", "请先取消正在进行的投票")
         reason = payload.get("outcome", "CANCELLED")
         require(reason in TERMINAL - {"APPROVED"}, "不支持的结束原因")
+        if reason == "NO_CONSENSUS":
+            require(any(p["evaluation"]["status"] == "FEASIBLE" and p["input_version"] == room["input_version"] for p in room["proposals"]), "当前没有有效可行方案，请选择无可行方案、信息不足或主动结束")
         if reason == "NO_FEASIBLE_PROPOSAL":
             require(room["analysis"] and not room["analysis"]["feasible_count"] and room["proposals"] and all(p["evaluation"]["status"] == "INFEASIBLE" for p in room["proposals"]), "当前数据不支持无可行方案结论")
         if reason == "INSUFFICIENT_DATA":
@@ -295,6 +297,24 @@ def mutate(room, user_id, action, payload, revision, limits):
         event(room, "finished", "决策已结束并保存报告")
     else:
         raise HTTPException(400, "未知操作")
+
+
+def redact_evaluations(value, user_id=None):
+    """Keep the agreed score matrix, but not others' personal scoring inputs."""
+    if isinstance(value, list):
+        for item in value:
+            redact_evaluations(item, user_id)
+    elif isinstance(value, dict):
+        for utility in value.get("utilities", []):
+            if utility.get("member_id") != user_id:
+                utility.pop("dimensions", None)
+        for violation in value.get("violations", []):
+            if violation.get("member_id") != user_id:
+                violation["member_id"] = None
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                redact_evaluations(child, user_id)
+    return value
 
 
 def public_vote(vote, user_id=None):
@@ -324,8 +344,8 @@ def view(room, user_id, online=()):
         attendees = [x for x in engine.active_members(room) if x["attendance"] != "no"]
         r["attendance_evaluation"] = engine.evaluate(room, room["result"]["proposal"]["itinerary"], members=attendees)
         r["attendance_provisional"] = any(x["attendance"] == "undecided" for x in attendees)
-    return r
+    return redact_evaluations(r, user_id)
 
 
 def display_view(room):
-    return {"scenario": room["scenario"], "state": room["state"], "member_count": len(engine.active_members(room)), "ready_count": sum(m["confirmed"] for m in engine.active_members(room)), "round": room["round"], "proposals": [{"title": p["title"], "evaluation": {k: p["evaluation"][k] for k in ("status", "score", "average", "minimum", "coverage", "cost", "start", "end")}} for p in room["proposals"]], "vote": {"deadline": room["vote"]["deadline"], "status": room["vote"]["status"], "submitted": len(room["vote"]["votes"]), "total": len(room["vote"]["electorate"]), "required": room["vote"]["required"]} if room["vote"] else None, "result": {"outcome": room["result"]["outcome"]} if room["result"] else None}
+    return {"scenario": room["scenario"], "state": room["state"], "member_count": len(engine.active_members(room)), "ready_count": sum(m["confirmed"] for m in engine.active_members(room)), "round": room["round"], "proposals": [{"title": p["title"], "evaluation": {k: p["evaluation"][k] for k in ("status", "score", "average", "minimum", "coverage", "cost", "start", "end")}} for p in room["proposals"]], "vote": {"deadline": room["vote"]["deadline"], "status": room["vote"]["status"], "submitted": len(room["vote"]["votes"]), "total": len(room["vote"]["electorate"]), "round": room["vote"]["round"], "required": room["vote"]["required"]} if room["vote"] else None, "result": {"outcome": room["result"]["outcome"]} if room["result"] else None}

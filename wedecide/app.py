@@ -18,6 +18,7 @@ from .realtime import Hub
 hub = Hub()
 coordinator = ai.Coordinator()
 login_attempts = {}
+password_slots = asyncio.Semaphore(2)
 
 
 def authenticated(request, admin=False):
@@ -354,6 +355,18 @@ async def room_models(key: str, request: Request):
     return {"models": await ai.discover_models(provider)}
 
 
+@app.get("/api/rooms/{key}/invite.svg")
+async def invitation_qr(key: str, request: Request):
+    import qrcode
+    from qrcode.image.svg import SvgPathFillImage
+    uid = authenticated(request)
+    room = current_room(key)
+    domain.member(room, uid)
+    url = (PUBLIC_URL or str(request.base_url).rstrip("/")) + "/r/" + room["code"]
+    image = qrcode.make(url, image_factory=SvgPathFillImage, border=4)
+    return Response(image.to_string(), media_type="image/svg+xml")
+
+
 @app.get("/api/rooms/{key}/report")
 async def report(key: str, request: Request):
     uid = authenticated(request)
@@ -367,7 +380,7 @@ async def report(key: str, request: Request):
     for vote in [data.get("vote"), *data.get("vote_history", [])]:
         if vote:
             vote.pop("my_vote", None)
-    return Response(store.dumps(data), media_type="application/json", headers={"Content-Disposition": f'attachment; filename="wedecide-{room["code"]}.json"'})
+    return Response(store.dumps(domain.redact_evaluations(data)), media_type="application/json", headers={"Content-Disposition": f'attachment; filename="wedecide-{room["code"]}.json"'})
 
 
 @app.get("/api/display/{token}")
@@ -390,7 +403,8 @@ async def admin_login(data: Login, request: Request, response: Response):
     with store.connect() as db:
         row = db.execute("SELECT value FROM settings WHERE key='admin_password'").fetchone()
     domain.require(row is not None, "管理员密码尚未设置，请在后端运行 wedecide admin-password", 403)
-    valid = await asyncio.to_thread(verify_password, data.password, row[0])
+    async with password_slots:
+        valid = await asyncio.to_thread(verify_password, data.password, row[0])
     if not valid:
         login_attempts[ip] = (attempts + 1 if time.time() - when < 900 else 1, time.time())
         raise HTTPException(401, "密码不正确")
@@ -421,6 +435,8 @@ async def admin_save(request: Request):
     data = await request.json()
     with store.transaction() as db:
         config = store.settings(db)
+        domain.require(data.get("revision") == config["revision"], "管理员配置已在另一页面更新，请重新登录页面后再保存", 409)
+        config["revision"] += 1
         for key, low, high in [("max_rooms", 1, 128), ("max_members", 1, 64), ("ai_concurrency", 1, 16), ("ai_queue_limit", 1, 128), ("room_idle_hours", 1, 720), ("retention_days", 1, 365)]:
             value = data.get(key, config[key])
             domain.require(type(value) is int and low <= value <= high, f"{key} 须为 {low}–{high} 的整数")
