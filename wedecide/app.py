@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from . import ai, domain, engine, store
 from .cli import verify_password
-from .config import ROOT, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
+from .config import WEB_DIR, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
 from .models import AIInput, CreateRoom, JoinRoom, Login, Mutation
 from .realtime import Hub
 
@@ -405,7 +405,7 @@ async def admin_login(data: Login, request: Request, response: Response):
         login_attempts.pop(next(iter(login_attempts)))
     with store.connect() as db:
         row = db.execute("SELECT value FROM settings WHERE key='admin_password'").fetchone()
-    domain.require(row is not None, "管理员密码尚未设置，请在后端运行 wedecide admin-password", 403)
+    domain.require(row is not None, "管理员密码尚未设置，请在后端运行 python -m wedecide.cli admin-password", 403)
     async with password_slots:
         valid = await asyncio.to_thread(verify_password, data.password, row[0])
     if not valid:
@@ -498,16 +498,16 @@ async def admin_close(key: str, request: Request):
     return {"ok": True}
 
 
-app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 @app.get("/admin")
 async def admin_page():
-    return FileResponse(ROOT / "web" / "admin.html")
+    return FileResponse(WEB_DIR / "admin.html")
 
 
 @app.get("/{path:path}")
 async def index(path: str):
     if path.startswith("api/"):
         raise HTTPException(404, "接口不存在")
-    return FileResponse(ROOT / "web" / "index.html")
+    return FileResponse(WEB_DIR / "index.html")

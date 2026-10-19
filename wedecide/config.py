@@ -1,8 +1,13 @@
 from pathlib import Path
 import os
+import sysconfig
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.environ.get("WEDECIDE_DATA_DIR", str(ROOT / "data"))).expanduser().resolve()
+WEB_DIR = ROOT / "web"
+if not WEB_DIR.is_dir():
+    WEB_DIR = Path(sysconfig.get_path("data")) / "share" / "wedecide" / "web"
+DEFAULT_DATA = ROOT / "data" if (ROOT / "web").is_dir() else Path.cwd() / "data"
+DATA_DIR = Path(os.environ.get("WEDECIDE_DATA_DIR", str(DEFAULT_DATA))).expanduser().resolve()
 DB_PATH = DATA_DIR / "wedecide.sqlite3"
 HOST = os.environ.get("WEDECIDE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("WEDECIDE_PORT", "8000"))
