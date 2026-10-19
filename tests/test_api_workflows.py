@@ -146,6 +146,8 @@ class ApiWorkflowTests(unittest.TestCase):
         self.addCleanup(client.close)
         response = client.get('/api/bootstrap')
         self.assertEqual(response.status_code, 200, response.text)
+        response = client.post('/api/auth/register', json={'username': '回归' + secrets.token_hex(5), 'password': 'regression-password'})
+        self.assertEqual(response.status_code, 200, response.text)
         return client
 
     def room(self, client=None, **changes):
@@ -321,6 +323,8 @@ class ShutdownTests(unittest.TestCase):
         server.start()
         with server.client() as client:
             client.get('/api/bootstrap')
+            registered = client.post('/api/auth/register', json={'username': '退出' + secrets.token_hex(5), 'password': 'regression-password'})
+            self.assertEqual(registered.status_code, 200, registered.text)
             response = client.post('/api/rooms', json={'username': '退出回归', 'scenario': {'title': '退出后保留'}})
             self.assertEqual(response.status_code, 200, response.text)
             room = response.json()

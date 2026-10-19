@@ -37,6 +37,7 @@ def init():
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript('''
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS accounts (user_id TEXT PRIMARY KEY, username TEXT NOT NULL, username_key TEXT UNIQUE NOT NULL, password TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, admin INTEGER NOT NULL DEFAULT 0, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL, updated REAL NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, user_id TEXT NOT NULL, role TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL);
@@ -116,3 +117,17 @@ def messages(room_id, user_id, before=None, limit=50):
     with connect() as db:
         rows = db.execute("SELECT * FROM messages WHERE room_id=? AND (user_id=? OR kind='shared') AND id<? ORDER BY id DESC LIMIT ?", (room_id, user_id, before or 9223372036854775807, limit)).fetchall()
     return [{**dict(r), "metadata": json.loads(r["metadata"])} for r in reversed(rows)]
+
+
+def account(user_id):
+    with connect() as db:
+        row = db.execute("SELECT user_id,username FROM accounts WHERE user_id=?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def has_rooms(user_id):
+    with connect() as db:
+        for row in db.execute("SELECT data FROM rooms"):
+            if any(member["id"] == user_id for member in json.loads(row[0])["members"]):
+                return True
+    return False

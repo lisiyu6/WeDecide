@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from . import ai, domain, engine, store
+from . import accounts, ai, domain, engine, store
 from .cli import verify_password
 from .config import WEB_DIR, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
 from .models import AIInput, CreateRoom, JoinRoom, Login, ModelDiscovery, Mutation
@@ -18,7 +18,7 @@ from .realtime import Hub
 hub = Hub()
 coordinator = ai.Coordinator()
 login_attempts = {}
-password_slots = asyncio.Semaphore(2)
+password_slots = accounts.password_slots
 
 
 def authenticated(request, admin=False):
@@ -102,6 +102,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="WeDecide", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.include_router(accounts.router)
 
 
 @app.middleware("http")
@@ -148,7 +149,7 @@ async def ai_error(request, exc):
 async def bootstrap(request: Request, response: Response):
     uid = ensure_guest(request, response)
     config = store.settings()
-    return {"user_id": uid, "limits": {k: config[k] for k in ("max_rooms", "max_members")}, "providers": [{"id": p["id"], "name": p["name"], "model": p["model"]} for p in config["providers"] if p["enabled"]], "default_provider": config["default_provider"], "public_url": PUBLIC_URL}
+    return {"user_id": uid, "account": store.account(uid), "has_legacy_rooms": store.account(uid) is None and store.has_rooms(uid), "limits": {k: config[k] for k in ("max_rooms", "max_members")}, "providers": [{"id": p["id"], "name": p["name"], "model": p["model"]} for p in config["providers"] if p["enabled"]], "default_provider": config["default_provider"], "public_url": PUBLIC_URL}
 
 
 @app.get("/api/rooms")
@@ -168,7 +169,7 @@ async def my_rooms(request: Request):
 
 @app.post("/api/rooms")
 async def create_room(data: CreateRoom, request: Request, response: Response):
-    uid = ensure_guest(request, response)
+    uid = accounts.required(request)
     with store.transaction() as db:
         config = store.settings(db)
         count = db.execute("SELECT count(*) FROM rooms WHERE state NOT IN ('APPROVED','NO_CONSENSUS','NO_FEASIBLE_PROPOSAL','INSUFFICIENT_DATA','CANCELLED')").fetchone()[0]
@@ -184,7 +185,7 @@ async def create_room(data: CreateRoom, request: Request, response: Response):
 
 @app.post("/api/join/{key}")
 async def join_room(key: str, data: JoinRoom, request: Request, response: Response):
-    uid = ensure_guest(request, response)
+    uid = accounts.required(request)
     with store.transaction() as db:
         room = get_room(db, key)
         existing = next((m for m in room["members"] if m["id"] == uid), None)

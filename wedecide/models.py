@@ -152,5 +152,18 @@ class AIInput(Model):
     text: str = Field(min_length=1, max_length=6000)
     kind: Literal["chat", "preferences", "scenario", "negotiate"] = "chat"
 
+class AccountCredentials(Model):
+    username: str = Field(min_length=1, max_length=30)
+    password: str = Field(min_length=6, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def clean_username(cls, value):
+        value = value.strip()
+        if not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError("用户名须为 1–30 字的可见文字")
+        return value
+
+
 class Login(Model):
     password: str = Field(min_length=1, max_length=256)
