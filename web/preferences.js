@@ -1,4 +1,4 @@
-import {$,$$,esc,icon,field,textarea,select,check,time,money,minutes,number,terminal} from './common.js';
+import {$,$$,setText,esc,icon,field,textarea,select,check,time,money,minutes,number,terminal} from './common.js';
 
 const STEPS=['预算','时间','活动偏好','待确认问题','预览确认'];
 const split=value=>String(value||'').split(/[,，\n]/).map(v=>v.trim()).filter(Boolean);
@@ -27,7 +27,7 @@ export function preferenceEditor(state){
   const step=Math.max(0,Math.min(4,state.prefStep||0));
   return `<div class="card pref-editor"><div class="card-title"><div><h2>慢慢填，一步一步就好</h2><p class="hint">左右滑动卡片，或点击步骤与下方按钮。填写内容会保留在当前浏览器。</p></div><span data-pref-badge class="badge ${!draft&&r.me.confirmed?'good':''}">${draft?'草稿 · 待你确认':r.me.confirmed?'已确认 V'+r.me.preference_version:'尚未确认'}</span></div>
   ${locked?'<div class="notice warm">投票期间或决策结束后，个人条件已锁定；仍可翻看各张卡片。</div>':''}
-  <form id="preference-form" novalidate data-pref-step="${step}" data-locked="${locked}" data-saving="${saving}">
+  <form id="preference-form" data-preference-editor novalidate data-pref-step="${step}" data-locked="${locked}" data-saving="${saving}">
     <nav class="pref-progress" aria-label="填写步骤">${STEPS.map((label,i)=>`<button type="button" data-pref-go="${i}" class="${i===step?'active':''}" ${i===step?'aria-current="step"':''}><span>${i+1}</span>${label}${i===3?'<b data-pref-pending></b>':''}</button>`).join('')}</nav>
     <fieldset class="pref-fields" ${locked||saving?'disabled':''}>
       <textarea name="unresolved" hidden>${esc(questions.join('\n'))}</textarea>
@@ -64,11 +64,10 @@ export function updatePreferenceFeedback(form){
   if(p.other.length>2000)errors.push({step:2,text:'其他想法请控制在 2,000 字以内。'});
   if(p.notes.length>20||p.notes.some(v=>v.length>500))errors.push({step:3,text:'补充说明最多 20 条，每条不超过 500 字。'});
   const pending=p.unresolved.length,ready=!locked&&!saving&&!pending&&!errors.length;
-  const status=$('[data-pref-validation]',form);
-  status.textContent=saving?'正在保存这次确认，请稍候。':locked?'这些是已锁定的个人条件，可以翻页查看。':pending?`还有 ${pending} 项待核对，请在“待确认问题”卡片中逐条处理。`:errors[0]?.text||'内容会保留；最后一步由你确认生效。';
-  status.classList.toggle('pref-invalid',!locked&&Boolean(pending||errors.length));
+  const status=setText('[data-pref-validation]',saving?'正在保存这次确认，请稍候。':locked?'这些是已锁定的个人条件，可以翻页查看。':pending?`还有 ${pending} 项待核对，请在“待确认问题”卡片中逐条处理。`:errors[0]?.text||'内容会保留；最后一步由你确认生效。',form);
+  status?.classList.toggle('pref-invalid',!locked&&Boolean(pending||errors.length));
   $('[data-pref-confirm]',form).disabled=!ready;
-  $('[data-pref-pending]',form).textContent=pending?String(pending):'';
+  setText('[data-pref-pending]',pending?String(pending):'',form);
   const weight=value=>importance.find(([v])=>v===String(value))?.[1]||'一般';
   const categories=Object.entries(p.categories).map(([c,v])=>`${v===100?'喜欢':v===50?'一般':'不喜欢'}：${c}`).join('；')||'尚未评价，保留选择空间';
   const preferred=[p.preferred_start==null?'':`希望 ${time(p.preferred_start)} 之后开始`,p.preferred_end==null?'':`希望 ${time(p.preferred_end)} 之前结束`].filter(Boolean).join('；');
@@ -84,9 +83,14 @@ export function goToPreferenceStep(step){
   changeStep?.(index);
 }
 export function mountPreferenceEditor(root,onStep){
-  cleanup?.();cleanup=null;activeForm=$('#preference-form',root);changeStep=null;
-  if(!activeForm)return;
-  const form=activeForm,track=$('[data-pref-track]',form),pages=$$('[data-pref-page]',form);
+  cleanup?.();cleanup=null;activeForm=null;changeStep=null;
+  const form=root?.querySelector('form[data-preference-editor]');
+  if(!form)return;
+  const track=$('[data-pref-track]',form),pages=$$('[data-pref-page]',form);
+  // Mount only the complete card editor, never another room page or a stale form.
+  const complete=['validation','confirm','position','back','next','review','questions'].every(name=>$(`[data-pref-${name}]`,form));
+  if(!track||pages.length!==STEPS.length||!complete)return;
+  activeForm=form;
   let timer=null,current=Number(form.dataset.prefStep||0),observer=null,previousWidth=track.clientWidth;
   const resize=()=>{const width=track.clientWidth;if(width!==previousWidth){previousWidth=width;track.scrollLeft=current*width;}track.style.height=Math.max(280,Math.ceil(pages[current].scrollHeight))+'px';};
   changeStep=index=>{
@@ -96,7 +100,7 @@ export function mountPreferenceEditor(root,onStep){
     $('[data-pref-back]',form).disabled=index===0;
     $('[data-pref-next]',form).hidden=index===4;
     $('[data-pref-confirm]',form).hidden=index!==4;
-    $('[data-pref-position]',form).textContent=`${index+1} / 5 · ${STEPS[index]}`;
+    setText('[data-pref-position]',`${index+1} / 5 · ${STEPS[index]}`,form);
     resize();
   };
   const persist=()=>form.elements.unresolved.dispatchEvent(new Event('input',{bubbles:true}));

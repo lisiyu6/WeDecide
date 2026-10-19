@@ -1,4 +1,4 @@
-import {$,$$,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
+import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
 import {home,creation,joinPage,waiting} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
@@ -18,8 +18,9 @@ function render(preserve=false) {
  else if(state.route==='join')root.innerHTML=joinPage(state.code);
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state):waiting(state.room);
  if(saved)restoreInputs(root,saved);
- renderProviderModels(root);
- mountPreferenceEditor(root,step=>{state.prefStep=step;if(state.prefDraft&&state.prefDraft.step!==step){state.prefDraft.step=step;saveDraft(draftKey(),state.prefDraft);}});
+ const roomView=state.route==='room'&&state.room?.me.status==='approved'?$('#room-view',root):null;
+ if(roomView&&state.tab==='settings')renderProviderModels(roomView);
+ mountPreferenceEditor(state.tab==='preferences'?roomView:null,step=>{state.prefStep=step;if(state.prefDraft&&state.prefDraft.step!==step){state.prefDraft.step=step;saveDraft(draftKey(),state.prefDraft);}});
  if(state.room?.me.status==='approved'){
    const chat=$('.chat-messages');if(chat)chat.scrollTop=chat.scrollHeight;
    countdown();
@@ -98,7 +99,16 @@ async function route() {
    }
    const rooms=await api('/api/rooms');if(version!==routeVersion)return;
    state.route='home';state.room=null;state.rooms=rooms;render();
- }catch(error){if(version!==routeVersion)return;$('#app').innerHTML=`<div class="waiting">${logo}<div class="card">${empty('暂时没有打开这个空间',error.message,'<a href="/" data-nav class="button secondary">返回首页</a>')}</div></div>`;}
+ }catch(error){
+   if(version!==routeVersion)return;
+   const roomLoaded=parts[0]==='r'&&state.room&&[state.room.id,state.room.code].includes(parts[1]);
+   // Retain the created room and log the stack instead of making it look like a failed POST.
+   console.error('WeDecide page navigation failed',error);
+   mountPreferenceEditor(null,()=>{});state.route='error';
+   const retry=`<a href="${esc(url.pathname+url.search)}" data-nav class="button">重新打开${roomLoaded?'这个空间':'页面'}</a>`;
+   const message=roomLoaded&&!error.status?'空间已经保存，页面显示时出现问题。可以重新打开，无需再次创建。':error.message;
+   $('#app').innerHTML=`<div class="waiting">${logo}<div class="card">${empty(roomLoaded?'空间页面暂时没有显示完整':'暂时没有打开这个空间',message,retry+'<a href="/" data-nav class="button secondary">返回首页</a>')}${roomLoaded?`<p class="hint">房间码 ${esc(state.room.code)}</p>`:''}<details class="advanced"><summary>错误详情</summary><p class="hint">${esc(error.message)}</p></details></div></div>`;
+ }
 }
 function navigate(url) {history.pushState({},'',url);void route();window.scrollTo(0,0);}
 async function mutate(action,payload={},revision=null) {
@@ -235,7 +245,7 @@ document.addEventListener('input',event=>{
    const badge=$('[data-pref-badge]');if(badge){badge.textContent='草稿 · 待你确认';badge.classList.remove('good');}
  }else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
  else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
- else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;$('#fairness-label').textContent=`${event.target.value}%`;}
+ else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;setText('#fairness-label',`${event.target.value}%`,form);}
  else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
  else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;saveDraft('wd-create',state.creationDraft);}
 });

@@ -1,5 +1,7 @@
 export const $ = (selector, root = document) => root.querySelector(selector);
 export const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+// Optional status labels may disappear during navigation or component replacement.
+export function setText(selector,value,root=document) {const node=root?.querySelector(selector);if(node)node.textContent=value;return node;}
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const time = value => value == null ? '待确认' : `${String(Math.floor(value / 60)).padStart(2,'0')}:${String(value % 60).padStart(2,'0')}`;
 export const minutes = value => value ? value.split(':').reduce((h,m) => +h*60 + +m) : null;

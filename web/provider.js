@@ -1,4 +1,4 @@
-import {$,$$,esc,icon,field,textarea,select,check,formData,formId,jsonField,number} from './common.js';
+import {$,$$,setText,esc,icon,field,textarea,select,check,formData,formId,jsonField,number} from './common.js';
 
 export function providerFields(provider={}) {
   return `<div data-provider-editor>
@@ -82,20 +82,21 @@ function picker(form) {
   return pickers.get(key);
 }
 function paintPicker(form) {
-  if(!form?.querySelector('[data-fetch-models]'))return;
-  const state=picker(form),button=$('[data-fetch-models]',form),status=$('[data-model-status]',form);
+  if(!form?.querySelector('[data-provider-editor] [data-fetch-models]'))return;
+  const state=picker(form),button=$('[data-fetch-models]',form);
   button.disabled=state.loading;
   button.innerHTML=state.loading?'<span class="spinner"></span> 正在拉取…':`${icon('download',14)} 拉取模型`;
-  status.textContent=state.error || (state.loading?'正在从供应商读取模型列表…':state.fetched?state.models.length?`已获取 ${state.models.length} 个模型。`:'接口返回的模型列表为空，可手动填写模型名称。':'');
-  status.classList.toggle('model-error',Boolean(state.error));
+  const status=setText('[data-model-status]',state.error || (state.loading?'正在从供应商读取模型列表…':state.fetched?state.models.length?`已获取 ${state.models.length} 个模型。`:'接口返回的模型列表为空，可手动填写模型名称。':''),form);
+  status?.classList.toggle('model-error',Boolean(state.error));
   const panel=$('[data-model-picker]',form);
+  if(!panel)return;
   panel.hidden=!state.models.length;
   if(panel.hidden)return;
-  const search=$('[data-model-search]',form);
+  const search=$('[data-model-search]',form),options=$('[data-model-choice]',form);
+  if(!search||!options)return;
   if(search.value!==state.filter)search.value=state.filter;
   const filtered=state.models.filter(id=>id.toLowerCase().includes(state.filter.toLowerCase()));
-  $('[data-model-count]',form).textContent=`可用模型 · ${filtered.length} / ${state.models.length}`;
-  const options=$('[data-model-choice]',form);
+  setText('[data-model-count]',`可用模型 · ${filtered.length} / ${state.models.length}`,form);
   options.replaceChildren();
   for(const id of filtered){
     const option=document.createElement('option');option.value=id;option.textContent=id;options.append(option);
