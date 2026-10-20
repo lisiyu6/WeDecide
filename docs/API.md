@@ -37,7 +37,7 @@
 | `plans` | `plans` 列表 | 房主；最多六份自定义活动行程，每份最多五项，引用当前活动资源 |
 | `agent_draft` | 空 | 房主；校验 input_version 与 context_version，采纳新增/修正候选草稿，新事实仍待核对 |
 | `knowledge` | `text`, `knowledge_version` | 房主；可空，最多 12000 字，知识独立版本防止覆盖 |
-| `supplement` | `title?`, `text`, `visibility?` | 获准成员；private 默认，或 shared；最多 2000 字，独立提交不因他人并发被拒绝 |
+| `supplement` | `title?`, `text`, `visibility?`, `kind?` | 获准成员；kind 默认 information，suggestion 必须显式 visibility=shared；private 默认，或 shared；最多 2000 字，独立提交不因他人并发被拒绝 |
 | `agent_toggle` | `enabled` 布尔值 | 房主；停止/恢复后续自动推进，已开始的请求可完成 |
 | `settings` | `scenario`, `rules` | 房主；正式投票开始后冻结规则 |
 | `analyze` | 空 | 房主；全员已确认且有候选资源 |
@@ -70,11 +70,11 @@
 
 AI 请求按 kind 使用同一套供应商选择、并发和消息隔离机制：
 
-- `interview`：可带当前 `draft`（Preference）及 `request_id`。结果 metadata 包含 `interview`（question、left、right、summary、insights、ready）和 `draft`；不确认成员、不改变正式偏好。题目由模型动态生成。
+- `interview`：可带当前 `draft`（Preference）及 `request_id`。结果 metadata 包含 `interview`（question、left、right、summary、insights、ready）和 `draft`；不确认成员、不改变正式偏好。题目由模型动态生成。可带 interview_action=answer（默认）/start/continue/finish；本轮最多四问，重复题或 finish 直接整理。metadata.interview_progress 返回 asked、limit、reason，warnings/mode 标明保留旧草稿的降级。
 - `explain`：metadata.explanation 包含 summary、reasons、risks、next_steps，依据本人上下文与当前方案解释取舍，仅本人可见。
-- `agent`：仅房主可以主动调用。模型根据公开状态自主响应或请求 analyze 工具，单轮最多三次模型请求。实际工具结果返回模型继续分析，当前输入版本仍有效且不在投票/结束时才安装分析结果。房间快照 `agent` 提供共享总结、下一步和待采纳草稿，`agent_pending` 表示是否在执行。
+- `agent`：仅房主可以主动调用。模型根据公开状态自主响应或请求 analyze 工具，单轮最多三次模型请求，包含结构修复。实际工具结果返回模型继续分析，当前输入版本仍有效且不在投票/结束时才安装分析结果。房间快照 `agent` 提供共享总结、下一步和待采纳草稿，`agent_pending` 表示是否在执行。
 
-启动 Agent 后，成员确认与候选变化可按新 input_version 自动推进；每个版本只自动尝试一次，失败由用户重试。正式投票与结束期间不自动推进。Agent 连续目标保存在房间 `agent` 报告中，不依赖浏览器常驻。
+启动 Agent 后，成员确认与候选变化可按新 input_version 自动推进；每个版本只自动尝试一次，失败由用户重试。新公开 suggestion 可在个人需求尚未全部确认时触发归纳，正式计算仍要求全体确认。正式投票与结束期间不自动推进。Agent 连续目标保存在房间 `agent` 报告中，不依赖浏览器常驻。
 
 草稿永远不替成员确认正式条件。异步结果带生成时的 input_version、preference_version 和 request_id；旧草稿须重新核对。Agent 的内部 `_prepared_analysis` 不进入消息响应。
 
@@ -84,7 +84,7 @@ Preference.criteria 支持最多十二项动态要求：`{name, rating:0|50|100,
 
 房间 `knowledge` 为可选前置知识，`supplements` 只返回本人或共享条目，JSON 报告只包含共享补充。房间最多保留一百张补充卡。私密补充提交后会排入同一房间 Agent 的 interview 整理流程，结果仍需本人确认；有请求在进行时，维护循环在空闲后继续，失败不反复自动重试。知识或共享资料变化增加 context_version；投票期间不推进 Agent、不修改锁定快照。
 
-Agent 的内部 planning_context 包含去标识、相同条件合并计数的 algorithm_inputs，排除原话、notes、discovery；该字段不返回成员接口。模型可在 resource_updates 提出已存在候选的完整事实修正草稿，资源 id 必须已存在。采纳后 confirmed/verified 重置为 false，再由房主核对。
+Agent 的内部 planning_context 包含去标识、相同条件合并计数的 algorithm_inputs，排除原话、notes、discovery；该字段不返回成员接口。comparison_digest 汇总当前计算版本的费用/群体分/最低预测满意度与已知维度的取舍方向，不加入未知分数。模型可在 resource_updates 提出已存在候选的完整事实修正草稿，资源 id 必须已存在。采纳后 confirmed/verified 重置为 false，再由房主核对。
 
 | 方法 | 路径 | 日期换算 |
 | --- | --- | --- |
@@ -135,3 +135,5 @@ OpenAI 兼容供应商的 `endpoint` 可填根地址或以 `/v1` 结尾的基址
 - `POST /api/auth/logout`：JSON 空对象 `{}`，仅注销当前设备，不结束房间、不注销其他设备。
 - 创建房间和申请加入要求普通账号，未登录返回 401。已有匿名成员仍可访问原房间并注册绑定。
 - 账号名比较进行 Unicode NFKC 与大小写归一化；保存 scrypt 密码哈希。管理员登录接口和账号独立。
+
+结构化输出最多校验修复一次，受原任务时间限制；Agent 修复同时计入三次模型调用预算。兼容接口自动 JSON 模式只在未显式配置 response_format 时启用，明确拒绝参数则退回并缓存能力十分钟（最多64条）。持续格式错误返回 mode=preserved 和明确 notice/warnings；保留已完成的工具结果及当前有效草稿，未猜测新条件。场景失败则 mode=local，原始目标保留，不填写猜测日期和候选。真实网络与鉴权错误仍明确报告。

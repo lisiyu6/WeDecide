@@ -187,10 +187,10 @@ installProviderModels(form=>{
  if(form.elements.mode.value!=='custom')throw new Error('请先选择房间专用接口，再填写端点与密钥');
  return post(roomPath('/provider/models'),{provider:readProvider(form)});
 });
-async function askInterview(text) {
+async function askInterview(text,interview_action='answer') {
  if(state.room.ai_pending)throw new Error('AI 正在处理你上一条回答，请稍候');
  const form=$('#preference-form'),draft=form?readPreference(form):interviewDraft(state);
- await post(roomPath('/ai'),{kind:'interview',text,draft,request_id:crypto.randomUUID?.()||String(Date.now())});
+ await post(roomPath('/ai'),{kind:'interview',text,draft,interview_action,request_id:crypto.randomUUID?.()||String(Date.now())});
  state.room.ai_pending=true;state.interviewRaw='';state.dirtyForms.delete('interview-form');deleteDraft(`wd-interview:${state.room.id}:${state.room.me.id}`);state.prefStep=0;render(true);
 }
 const handlers={
@@ -216,9 +216,9 @@ const handlers={
  'plan-remove':el=>confirmAction('移除自定义行程','相关方案将按最新信息重新评价。',()=>mutate('plans',{plans:state.room.manual_plans.filter(p=>p.id!==el.dataset.id)})),
 
  'interview-answer':el=>{const turn=latestInterview(state)?.metadata.interview;if(!turn)throw new Error('问题已变化，请刷新后继续');const answer=el.dataset.choice==='skip'?'这项暂未确定，请不要替我设置条件':turn[el.dataset.choice];return askInterview(`针对问题「${turn.question}」，我的回答是：${answer}`);},
- 'interview-next':()=>askInterview('请继续用卡片了解我的想法，自主生成最有价值的下一问和两个不同选项；我还想继续表达，ready=false。'),
+ 'interview-next':()=>askInterview('请基于已知信息开始一轮简短卡片，只问会影响选择的关键差异；不要重复已有问题。','continue'),
  'interview-focus':()=>{const form=$('#interview-form');const detail=form?.closest('details');if(detail)detail.open=true;$('textarea',form)?.focus();},
- 'interview-summary':()=>askInterview('请先把已有回答整合成需求表，保留未知项，停止继续追问。'),
+ 'interview-summary':()=>askInterview('请先把已有回答整合成需求表，保留未知项，停止继续追问。','finish'),
  'explain-comparison':async()=>{await post(roomPath('/ai'),{kind:'explain',text:'请详细比较当前有效方案，解释与我需求的匹配、复杂取舍、未量化要求和资料缺项，并给出下一步。'});state.room.ai_pending=true;render(true);},
  'invite':()=>{const base=state.bootstrap.public_url||location.origin;const url=`${base}/r/${state.room.code}`;dialog('让伙伴一起加入',`<p class="muted">分享这个链接或房间码。申请加入后，需要房主批准。</p><div class="room-code">${esc(state.room.code)}</div><input class="copy-input" readonly value="${esc(url)}"><img class="qr" src="${roomPath('/invite.svg')}" alt="房间邀请二维码"><div class="actions"><button class="button" data-action="copy-invite">${icon('link',15)} 复制邀请链接</button></div>`);},
  'copy-invite':()=>copy(`${state.bootstrap.public_url||location.origin}/r/${state.room.code}`),

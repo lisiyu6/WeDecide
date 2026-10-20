@@ -349,7 +349,7 @@ async def queue_room_ai(room, uid, data):
     async def operation():
         if data.kind == "agent":
             return await agent.run(config, room, uid, data.text)
-        return await ai.complete(config, room, uid, data.kind, data.text, data.draft)
+        return await ai.complete(config, room, uid, data.kind, data.text, data.draft, data.interview_action)
     async def complete(result, error):
         with store.transaction() as db:
             current = store.load_room(db, room["id"])
@@ -372,7 +372,7 @@ async def queue_room_ai(room, uid, data):
         hub.publish(room["id"])
     coordinator.submit((room["id"], uid), operation, complete)
     with store.transaction() as db:
-        store.append_message(db, room["id"], uid, "user", data.kind, data.text)
+        store.append_message(db, room["id"], uid, "user", data.kind, data.text, {"interview_action":data.interview_action,"preference_version":next(m["preference_version"] for m in room["members"] if m["id"]==uid)})
         current = get_room(db, room["id"])
         if data.kind == "agent":
             current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}

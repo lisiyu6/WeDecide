@@ -24,7 +24,7 @@ class ComplexDecisionTests(unittest.TestCase):
     def test_agent_continues_public_goal_without_pending_members_or_private_requirements(self):
         room=self.room({'criteria':[{'name':'私密要求','hard':True}]})
         room['members'].append(domain.new_member('pending','未批准姓名'))
-        room['agent']={'goal':'比较长期方案','summary':'已明确优先考虑维护成本','next_step':'补齐资料','questions':['已有资料有哪些？'],'resources':[{'id':'draft','name':'待采纳方向'}]}
+        room['agent']={'input_version':room['input_version'],'context_version':room['context_version'],'goal':'比较长期方案','summary':'已明确优先考虑维护成本','next_step':'补齐资料','questions':['已有资料有哪些？'],'resources':[{'id':'draft','name':'待采纳方向'}]}
         domain.analyze(room)
         context=agent.public_context(room,'host')
         self.assertEqual(context['agent_memory']['goal'],'比较长期方案')

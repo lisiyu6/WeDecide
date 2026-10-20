@@ -220,6 +220,7 @@ class AIInput(Model):
     kind: Literal["chat", "preferences", "scenario", "negotiate", "interview", "explain", "agent"] = "chat"
     draft: Preference | None = None
     request_id: str = Field(default="", max_length=64)
+    interview_action: Literal["start", "answer", "continue", "finish"] = "answer"
 
 class AccountCredentials(Model):
     username: str = Field(min_length=1, max_length=30)
