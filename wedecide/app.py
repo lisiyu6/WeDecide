@@ -329,14 +329,19 @@ async def maybe_process_supplements(room):
 
 async def maybe_advance_agent(room):
     report = room.get("agent") or {}
-    if not report.get("enabled") or (report.get("attempted_input_version") == room["input_version"] and report.get("attempted_context_version",0)==room.get("context_version",0)) or room["state"] in domain.TERMINAL | {"VOTING"} or not all(member["confirmed"] for member in engine.active_members(room)):
+    suggestions=[item for item in room.get("supplements",[]) if item.get("kind")=="suggestion"]
+    new_suggestions=bool(suggestions and suggestions[-1]["id"]!=report.get("attempted_suggestion_id"))
+    attempted=(report.get("attempted_input_version")==room["input_version"] and report.get("attempted_context_version",0)==room.get("context_version",0))
+    if not report.get("enabled") or attempted or room["state"] in domain.TERMINAL | {"VOTING"}:
+        return
+    if not new_suggestions and not all(member["confirmed"] for member in engine.active_members(room)):
         return
     if (room["id"], room["host_id"]) in coordinator.pending:
         return
     try:
-        await queue_room_ai(room, room["host_id"], AIInput(kind="agent", text="决策信息已更新，请自主判断下一步；必要时调用分析工具，比较并解释当前方案、冲突和待补信息。"))
+        await queue_room_ai(room, room["host_id"], AIInput(kind="agent", text="共同决策资料或成员提议有更新。先整合公开提议和资料缺口；满足条件时调用校核工具，再解释取舍与下一步。"))
     except ai.AIError:
-        pass  # Queue capacity is bounded; the maintenance loop can try after capacity frees.
+        pass
 
 
 async def queue_room_ai(room, uid, data):
@@ -370,7 +375,7 @@ async def queue_room_ai(room, uid, data):
         store.append_message(db, room["id"], uid, "user", data.kind, data.text)
         current = get_room(db, room["id"])
         if data.kind == "agent":
-            current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0)}
+            current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
         store.save_room(db, current)
     hub.publish(room["id"])
     return {"queued": True}

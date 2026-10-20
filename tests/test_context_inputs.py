@@ -17,6 +17,24 @@ class ContextInputTests(unittest.TestCase):
     def action(self,uid,action,**payload):
         domain.mutate(self.room,uid,action,payload,self.room['revision'],{'max_members':8})
 
+    def test_public_suggestions_share_context_but_do_not_become_confirmed_facts(self):
+        version=self.room['context_version']
+        self.action('guest','supplement',kind='suggestion',visibility='shared',text='可以考虑学校附近的自助餐，价格待查。')
+        item=self.room['supplements'][-1]
+        self.assertEqual(item['kind'],'suggestion')
+        self.assertEqual(item['visibility'],'shared')
+        self.assertGreater(self.room['context_version'],version)
+        self.assertIn(item,domain.view(self.room,'host')['supplements'])
+        self.assertIn('价格待查',json.dumps(agent.public_context(self.room,'host'),ensure_ascii=False))
+        self.assertEqual(self.room['resources'],[])
+        self.assertFalse(self.room['members'][1]['confirmed'])
+
+    def test_suggestion_cannot_silently_upgrade_private_text_to_public(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            self.action('guest','supplement',kind='suggestion',visibility='private',text='仍然私密的原文')
+        self.assertEqual(self.room['supplements'],[])
+
     def test_optional_knowledge_persists_and_has_its_own_edit_version(self):
         self.assertEqual(self.room.get('knowledge',''),'')
         self.action('host','knowledge',text='可用资料：已有三台设备，预算另行确认。',knowledge_version=0)

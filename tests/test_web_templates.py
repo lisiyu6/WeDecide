@@ -148,6 +148,49 @@ class ContinuousInputTemplateTests(unittest.TestCase):
         self.assertIn('name="date_expression"',html['create'])
 
 
+class SideCardTemplateTests(unittest.TestCase):
+    def test_left_suggestions_and_right_information_have_separate_content_and_drafts(self):
+        script="""
+          import {contextDrawer} from './web/context.js';
+          const room={code:'r',state:'COLLECTING',host_id:'host',members:[{id:'host',name:'房主'}],me:{id:'host',status:'approved'},supplements:[{id:'p',kind:'suggestion',member_id:'host',text:'公开候选想法',visibility:'shared',at:1},{id:'n',kind:'information',member_id:'host',text:'私密补充文字',visibility:'private',at:1}]};
+          const base={room,contextOpen:true,contextTab:'supplements',suggestionDraft:{text:'尚未提交的提议'},contextDraft:{text:'尚未提交的补充'}};
+          console.log(JSON.stringify({left:contextDrawer({...base,contextSide:'left'}),right:contextDrawer({...base,contextSide:'right'})}));
+        """
+        output=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
+        pages=json.loads(output.stdout)
+        self.assertIn('id="suggestion-form"',pages['left'])
+        self.assertIn('尚未提交的提议',pages['left'])
+        self.assertIn('公开候选想法',pages['left'])
+        self.assertNotIn('私密补充文字',pages['left'])
+        self.assertNotIn('尚未提交的补充',pages['left'])
+        self.assertIn('id="supplement-form"',pages['right'])
+        self.assertIn('私密补充文字',pages['right'])
+        self.assertNotIn('公开候选想法',pages['right'])
+        self.assertNotIn('尚未提交的提议',pages['right'])
+
+
+class DecisionGuidanceTests(unittest.TestCase):
+    def test_next_step_tracks_confirmed_data_and_real_vote_state(self):
+        script="""
+          import {decisionFlow} from './web/flow.js';
+          const room={code:'R',state:'COLLECTING',host_id:'h',input_version:1,context_version:1,me:{id:'h',confirmed:false},members:[{id:'h',status:'approved',confirmed:false}],resources:[],proposals:[]};
+          const initial=decisionFlow({room,tab:'overview'});
+          room.me.confirmed=true;room.members[0].confirmed=true;room.resources=[{confirmed:true}];room.proposals=[{id:'p',input_version:1,evaluation:{status:'FEASIBLE'}}];room.selected_id='p';room.state='COMPARING';
+          const ready=decisionFlow({room,tab:'overview'});
+          room.state='VOTING';room.vote={my_vote:null};const voting=decisionFlow({room,tab:'overview'});
+          room.state='APPROVED';const finished=decisionFlow({room,tab:'overview'});
+          console.log(JSON.stringify({initial,ready,voting,finished}));
+        """
+        out=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
+        pages=json.loads(out.stdout)
+        self.assertIn('view=preferences',pages['initial'])
+        self.assertIn('确认',pages['initial'])
+        self.assertIn('正式投票',pages['ready'])
+        self.assertIn('view=vote',pages['voting'])
+        self.assertIn('view=result',pages['finished'])
+        for html in pages.values():self.assertEqual(html.count('aria-current="step"'),1)
+
+
 class ZenFlowTemplateTests(unittest.TestCase):
     def test_zen_comparison_shows_one_option_and_keeps_reachable_navigation(self):
         from wedecide import domain

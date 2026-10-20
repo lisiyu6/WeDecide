@@ -292,9 +292,16 @@ class KnowledgeInput(Model):
 
 
 class SupplementInput(Model):
+    kind: Literal["information", "suggestion"] = "information"
     title: str = Field(default="", max_length=80)
     text: str = Field(min_length=1, max_length=2000)
     visibility: Literal["private", "shared"] = "private"
+
+    @model_validator(mode="after")
+    def explicit_public_suggestion(self):
+        if self.kind=="suggestion" and self.visibility!="shared":
+            raise ValueError("提议对成员公开；私密内容请使用右侧补充信息")
+        return self
 
     @field_validator("text")
     @classmethod

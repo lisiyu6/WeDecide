@@ -112,9 +112,13 @@ class ProviderFixture(BaseHTTPRequestHandler):
             data=json.loads(body['messages'][-1]['content'])
             value=(date.fromisoformat(data['calendar']['date'])+timedelta(days=3)).isoformat()
             content=json.dumps({'date':value,'explanation':'按提供的当前日期换算三天后。','needs_clarification':False,'question':''},ensure_ascii=False)
+        elif 'Scenario Draft JSON Schema' in body['messages'][0]['content']:
+            content=json.dumps({'scenario':{'title':'周日学校周边晚餐','description':'周日晚上在学校周边吃饭，具体吃什么继续讨论','date':'2026-10-25'},'resources':[]},ensure_ascii=False)
         elif 'Decision Agent JSON Schema' in body['messages'][0]['content']:
             last=body['messages'][-1]['content']
-            if '提出通用备选' in last:
+            if 'suggestion' in last:
+                output={'tool':'respond','summary':'已整合成员公开提议，具体资料仍待核对。','next_step':'房主采纳并核对备选资料。','resources':[{'id':'suggested-option','kind':'decision','name':'学校周边餐饮方向','source':'成员公开提议，费用与商家待核对','cost':None}]}
+            elif '提出通用备选' in last:
                 output={'tool':'respond','goal':'比较技术方向','summary':'已提出可供核对的技术备选。','next_step':'房主采纳草稿并核对事实。','resources':[{'id':'agent-option','kind':'decision','name':'开源方案','description':'可自行部署的候选方向','category':'技术方案','cost':None,'attributes':{'可自行部署':True},'source':'测试场景提供的说明','confirmed':False}]}
             elif 'analyze 工具实际结果' in last:
                 output={'tool':'respond','goal':'形成共同决定','summary':'已调用校核工具，当前结果可以展开比较。','next_step':'房主选择有效方案，再由成员正式投票。'}
@@ -436,6 +440,26 @@ class ApiWorkflowTests(unittest.TestCase):
         self.assertEqual(result['date'],(date.fromisoformat(result['reference_date'])+timedelta(days=3)).isoformat())
         self.assertEqual(result['timezone'],'Asia/Shanghai')
         self.assertEqual(host.get(path).json()['scenario']['date'],room['scenario']['date'])
+
+    def test_member_suggestion_reaches_shared_agent_before_preferences_are_confirmed(self):
+        host,guest,room=self.pair()
+        room=self.configure(host,room)
+        path=f"/api/rooms/{room['id']}"
+        response=host.post(path+'/ai',json={'kind':'agent','text':'先了解目标，不进行正式比较'})
+        self.assertEqual(response.status_code,202)
+        self.replies(host,room)
+        current=guest.get(path).json()
+        original_resources=current['resources']
+        current=self.action(guest,current,'supplement',kind='suggestion',visibility='shared',text='可以考虑学校周边的自助餐，价格还需要核对')
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            updated=host.get(path).json()
+            if updated.get('agent',{}).get('context_version')==current['context_version'] and not updated['agent_pending']:break
+            time.sleep(.03)
+        self.assertIn('公开提议',updated['agent']['summary'])
+        self.assertTrue(updated['agent']['resources'])
+        self.assertEqual(updated['resources'],original_resources)
+        self.assertTrue(all(not m['confirmed'] for m in updated['members']))
 
     def test_agent_calls_evaluation_and_continues_after_confirmed_changes(self):
         host,room=self.room()

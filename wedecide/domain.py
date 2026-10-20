@@ -207,7 +207,7 @@ def mutate(room, user_id, action, payload, revision, limits):
         room["supplements"]=[*room.get("supplements",[]),item][-100:]
         if item["visibility"]=="shared":
             room["context_version"]=room.get("context_version",0)+1
-            event(room,"supplement","一位成员补充了共同决策资料"+("（不改变本轮投票快照）" if item["during_vote"] else ""))
+            event(room,"supplement",("一位成员提交了公开提议" if item["kind"]=="suggestion" else "一位成员补充了共同决策资料")+("（不改变本轮投票快照）" if item["during_vote"] else ""))
     elif action == "agent_toggle":
         host(room, user_id)
         require(isinstance(payload.get("enabled"), bool), "请选择是否自动推进")

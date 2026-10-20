@@ -1,5 +1,5 @@
 import {buildCreationScenario} from './creation.js';
-import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
+import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score,themeControl} from './common.js';
 import {contextDrawer,mountContextDrawer,resolveDate} from './context.js';
 import {manualPlanForm} from './decision.js';
 import {home,creation,joinPage,waiting,accountPage} from './pages.js';
@@ -7,7 +7,7 @@ import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
 import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep,latestInterview,interviewDraft} from './preferences.js';
 
-const state={zen:loadDraft('wd-zen')??true,focusProposal:null,bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,contextOpen:false,contextTab:'supplements',contextDraft:null,knowledgeDraft:null,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
+const state={zen:loadDraft('wd-zen')??true,focusProposal:null,bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,contextOpen:false,contextSide:'right',suggestionDraft:null,contextTab:'supplements',contextDraft:null,knowledgeDraft:null,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
 let stream=null,deletingRoom=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
 const roomPath=suffix=>`/api/rooms/${encodeURIComponent(state.room.id)}${suffix}`;
 const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
@@ -137,7 +137,7 @@ async function route() {
      state.code=code;state.tab=tab;state.room=room;state.route='room';state.messages=messages;state.provider=provider;state.hasOlder=messages.length===50;
      if(previousRoom!==room.id){state.prefAiOpen=false;state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());state.prefStep=state.prefDraft?.step??0;}
      state.interviewSeenId=latestInterview(state)?.id||0;if(tab==='preferences')state.prefStep=url.searchParams.get('stage')==='result'?1:0;
-     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';state.contextDraft=loadDraft(`wd-context:${room.id}:${room.me.id}`)||{};state.knowledgeDraft=loadDraft(`wd-knowledge:${room.id}:${room.me.id}`);
+     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';state.contextDraft=loadDraft(`wd-context:${room.id}:${room.me.id}`)||{};state.suggestionDraft=loadDraft(`wd-suggestion:${room.id}:${room.me.id}`)||{};state.knowledgeDraft=loadDraft(`wd-knowledge:${room.id}:${room.me.id}`);
      render();connect();return;
    }
    const rooms=await api('/api/rooms');if(version!==routeVersion)return;
@@ -169,8 +169,8 @@ async function saveRoomContext(action,payload){
  const room=await post(roomPath('/actions'),{revision:state.room.revision,action,payload});
  if(version!==routeVersion||state.room?.id!==key)return;
  state.room={...room,ai_pending:state.room.ai_pending};
- state.dirtyForms.delete(action==='knowledge'?'knowledge-form':'supplement-form');
- if(action==='supplement'){state.contextDraft={};deleteDraft(`wd-context:${key}:${room.me.id}`);}
+ state.dirtyForms.delete(action==='knowledge'?'knowledge-form':payload.kind==='suggestion'?'suggestion-form':'supplement-form');
+ if(action==='supplement'){if(payload.kind==='suggestion'){state.suggestionDraft={};deleteDraft(`wd-suggestion:${key}:${room.me.id}`);}else{state.contextDraft={};deleteDraft(`wd-context:${key}:${room.me.id}`);}}
  else{state.knowledgeDraft=null;deleteDraft(`wd-knowledge:${key}:${room.me.id}`);}
  render(true);await refresh(true);
 }
@@ -197,8 +197,10 @@ const handlers={
  'zen':()=>{state.zen=!state.zen;saveDraft('wd-zen',state.zen);render(true);},
  'focus-members':()=>{state.zen=false;render(true);},
  'focus-proposal':el=>{state.focusProposal=el.dataset.id;render(true);},
- 'context-open':()=>{state.contextOpen=true;render(true);},
- 'context-close':()=>{state.contextOpen=false;render(true);$('[data-action="context-open"]')?.focus();},
+ 'context-open':()=>{state.contextOpen=true;state.contextSide='right';render(true);},
+ 'suggestions-open':()=>{state.contextOpen=true;state.contextSide='left';render(true);},
+ 'organize-suggestions':async()=>{await post(roomPath('/ai'),{kind:'agent',text:'请先整合大家在左侧卡片公开提交的提议，合并相似方向，说明差异和资料缺口，提出可核对的候选草稿。未全员确认需求时先整理，不要伪造校核结果。'});await refresh(true);},
+ 'context-close':()=>{state.contextOpen=false;render(true);$(state.contextSide==='left'?'[data-action="suggestions-open"]':'[data-action="context-open"]')?.focus();},
  'context-tab':el=>{state.contextTab=el.dataset.tab;render(true);},
  'knowledge-discard':async()=>{state.knowledgeDraft=null;deleteDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`);state.dirtyForms.delete('knowledge-form');await refresh(true);render(true);},
  'context-to-preferences':()=>navigate(`/r/${state.room.code}?view=preferences&stage=result`),
@@ -325,6 +327,7 @@ async function submit(form) {
    await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('备选方案已保存，Agent 将按新信息继续');break;
   }
   case 'knowledge-form':await saveRoomContext('knowledge',{text:d.text,knowledge_version:Number(d.knowledge_version)});toast('前置知识已更新，房间 Agent 会统一参考');break;
+  case 'suggestion-form':await saveRoomContext('supplement',{kind:'suggestion',visibility:'shared',title:d.title,text:d.text});toast('提议已公开保存，房间 Agent 会统一参考。');break;
   case 'supplement-form':await saveRoomContext('supplement',{title:d.title,text:d.text,visibility:d.visibility});toast(state.room.state==='VOTING'?'补充已记录，本轮投票不受影响':'补充已保存，房间 Agent 将'+(d.visibility==='shared'?'用于共同决策':'整理为待确认的需求草稿'));break;
   case 'room-settings':if(d.date_expression?.trim()&&form.elements.date.dataset.expression!==d.date_expression.trim()){const resolved=await resolveFormDate(form);if(!resolved)return;d.date=resolved.date;}await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
   case 'room-provider':{
@@ -371,6 +374,7 @@ document.addEventListener('input',event=>{
    saveDraft('wd-create',state.creationDraft);
  }
  else if(formId(form)==='knowledge-form'){state.knowledgeDraft={text:form.elements.text.value,knowledge_version:Number(form.elements.knowledge_version.value)};saveDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`,state.knowledgeDraft);}
+ else if(formId(form)==='suggestion-form'){state.suggestionDraft=formData(form);saveDraft(`wd-suggestion:${state.room.id}:${state.room.me.id}`,state.suggestionDraft);}
  else if(formId(form)==='supplement-form'){state.contextDraft=formData(form);saveDraft(`wd-context:${state.room.id}:${state.room.me.id}`,state.contextDraft);}
  else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;state.creationDraft.error='';const review=$('[data-scenario-review]');if(review)review.hidden=state.creationDraft.source!==state.creationDraft.raw;const feedback=$('[data-creation-feedback]');if(feedback)feedback.hidden=true;saveDraft('wd-create',state.creationDraft);}
 });
@@ -385,8 +389,17 @@ document.addEventListener('toggle',event=>{if(event.target.id==='preference-ai')
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.menu)handlers.menu();});
 document.addEventListener('cancel',event=>{if(event.target.id==='context-drawer'){event.preventDefault();handlers['context-close']();}},true);
 let contextSwipe=null;
-document.addEventListener('pointerdown',event=>{if(event.button!==0||event.target.closest('input,textarea,select,button,a'))return;if(state.route==='room'&&state.room?.me.status==='approved'&&(state.contextOpen?event.target.closest('[data-context-handle]'):event.clientX>=innerWidth-24))contextSwipe={x:event.clientX,y:event.clientY,close:state.contextOpen};});
-document.addEventListener('pointerup',event=>{if(!contextSwipe)return;const dx=event.clientX-contextSwipe.x,dy=event.clientY-contextSwipe.y,close=contextSwipe.close;contextSwipe=null;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3&&(close?dx>0:dx<0))handlers[close?'context-close':'context-open']();});
+document.addEventListener('pointerdown',event=>{
+ if(event.button!==0||event.target.closest('input,textarea,select,button,a,[data-interview-card]'))return;
+ if(state.route!=='room'||state.room?.me.status!=='approved')return;
+ const close=state.contextOpen,side=close?state.contextSide:event.clientX<=24?'left':event.clientX>=innerWidth-24?'right':null;
+ if(side&&(!close||event.target.closest('[data-context-handle]')))contextSwipe={x:event.clientX,y:event.clientY,close,side};
+});
+document.addEventListener('pointerup',event=>{
+ if(!contextSwipe)return;const {x,y,close,side}=contextSwipe;contextSwipe=null;
+ const dx=event.clientX-x,dy=event.clientY-y,direction=side==='left'?1:-1;
+ if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3&&dx*direction*(close?-1:1)>0)handlers[close?'context-close':side==='left'?'suggestions-open':'context-open']();
+});
 document.addEventListener('pointercancel',()=>{contextSwipe=null;});
 window.addEventListener('popstate',()=>void route());
 window.addEventListener('beforeunload',()=>stream?.close());
@@ -401,5 +414,5 @@ function countdown(){
 setInterval(countdown,1000);
 setInterval(()=>{if(state.route==='room'&&!state.connected)void refresh(true);},10000);
 async function showDisplay(token,version){
- try{const d=await api(`/api/display/${encodeURIComponent(token)}`);if(version!==routeVersion)return;$('#app').innerHTML=`<main id="main" class="showcase"><div class="between">${logo}<span class="badge">只读投屏 · 自动更新</span></div><h1>${esc(d.scenario.title)}</h1><p class="muted">${esc(d.scenario.city)} · ${esc(d.scenario.date)} · ${labels[d.state]||d.state}</p><div class="three-columns"><div class="card metric"><div class="metric-label">有效参与</div><div class="metric-value">${d.member_count} 人</div></div><div class="card metric"><div class="metric-label">已确认需求</div><div class="metric-value">${d.ready_count} 人</div></div><div class="card metric"><div class="metric-label">正式投票轮次</div><div class="metric-value">${d.vote?.round||d.round||'—'}</div></div></div><div class="proposal-grid">${d.proposals.map(p=>`<div class="card proposal"><h2>${esc(p.title)}</h2><div class="proposal-score"><strong>${score(p.evaluation.score)}</strong><small>群体预测分 · 覆盖 ${p.evaluation.coverage.join('/')}</small></div>${badge(p.evaluation.status)}<p class="hint" style="margin-top:18px">${money(p.evaluation.cost)} / 人 · ${p.evaluation.kind==='decision'?'通用备选':time(p.evaluation.start)+' – '+time(p.evaluation.end)}</p></div>`).join('')}</div>${d.vote?`<div class="card" style="margin-top:25px"><div class="between"><h2>投票进度 ${d.vote.submitted} / ${d.vote.total}</h2>${badge(d.vote.status)}</div><p class="hint" style="margin-top:10px">至少 ${d.vote.required} 人明确接受 · 截止 ${dateTime(d.vote.deadline)}</p></div>`:''}<p class="hint" style="margin-top:30px">投屏只展示汇总信息，不展示成员的私密条件、消息与理由。</p></main>`;}catch(error){if(version===routeVersion)$('#app').innerHTML=`<div class="waiting">${empty('投屏暂不可用',error.message)}</div>`;}}
+ try{const d=await api(`/api/display/${encodeURIComponent(token)}`);if(version!==routeVersion)return;$('#app').innerHTML=`<main id="main" class="showcase"><div class="between">${logo}${themeControl}<span class="badge">只读投屏 · 自动更新</span></div><h1>${esc(d.scenario.title)}</h1><p class="muted">${esc(d.scenario.city)} · ${esc(d.scenario.date)} · ${labels[d.state]||d.state}</p><div class="three-columns"><div class="card metric"><div class="metric-label">有效参与</div><div class="metric-value">${d.member_count} 人</div></div><div class="card metric"><div class="metric-label">已确认需求</div><div class="metric-value">${d.ready_count} 人</div></div><div class="card metric"><div class="metric-label">正式投票轮次</div><div class="metric-value">${d.vote?.round||d.round||'—'}</div></div></div><div class="proposal-grid">${d.proposals.map(p=>`<div class="card proposal"><h2>${esc(p.title)}</h2><div class="proposal-score"><strong>${score(p.evaluation.score)}</strong><small>群体预测分 · 覆盖 ${p.evaluation.coverage.join('/')}</small></div>${badge(p.evaluation.status)}<p class="hint" style="margin-top:18px">${money(p.evaluation.cost)} / 人 · ${p.evaluation.kind==='decision'?'通用备选':time(p.evaluation.start)+' – '+time(p.evaluation.end)}</p></div>`).join('')}</div>${d.vote?`<div class="card" style="margin-top:25px"><div class="between"><h2>投票进度 ${d.vote.submitted} / ${d.vote.total}</h2>${badge(d.vote.status)}</div><p class="hint" style="margin-top:10px">至少 ${d.vote.required} 人明确接受 · 截止 ${dateTime(d.vote.deadline)}</p></div>`:''}<p class="hint" style="margin-top:30px">投屏只展示汇总信息，不展示成员的私密条件、消息与理由。</p></main>`;}catch(error){if(version===routeVersion)$('#app').innerHTML=`<div class="waiting">${empty('投屏暂不可用',error.message)}</div>`;}}
 void route();

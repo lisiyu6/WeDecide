@@ -1,6 +1,8 @@
 /* One visible decision card. A choice is committed only after its exit animation. */
 export function installSwipe(card,signal){
  if(!card)return;
+ const resize=()=>{const top=card.parentElement.getBoundingClientRect().top,height=window.visualViewport?.height||innerHeight;card.style.setProperty('--card-available',`${Math.max(220,height-Math.max(0,top)-145)}px`);};
+ resize();window.addEventListener('resize',resize,{signal});window.visualViewport?.addEventListener('resize',resize,{signal});
  const opts={signal};let drag=null,busy=false,dispatching=false,animation=null,timer=null;
  const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
  const stamp=card.querySelector('[data-interview-stamp]');
