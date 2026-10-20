@@ -87,5 +87,35 @@ class RoomSettingsTemplateTests(unittest.TestCase):
                     self.assertNotIn('disabled', buttons[0])
 
 
+class DecisionFlowTemplateTests(unittest.TestCase):
+    def test_comparison_codes_and_details_survive_a_different_fairness_order(self):
+        from wedecide import domain
+        from wedecide.models import CreateRoom, Preference, Resource
+        room=domain.new_room('host',CreateRoom(username='房主',scenario={'title':'统一决策'}),8)
+        room['members'][0].update(preference=Preference().model_dump(),confirmed=True)
+        room['resources']=[Resource(id=str(i),kind='decision',name=f'备选{i}',confirmed=True).model_dump() for i in range(2)]
+        domain.analyze(room)
+        room['proposals'][0]['evaluation'].update(average=100,minimum=0)
+        room['proposals'][1]['evaluation'].update(average=50,minimum=50)
+        script="""
+          import {comparisonPage} from './web/decision.js';
+          import {overview} from './web/room-views.js';
+          let raw='';for await(const chunk of process.stdin)raw+=chunk;
+          const room=JSON.parse(raw),state={room,messages:[],simFairness:1};
+          console.log(JSON.stringify({compare:comparisonPage(state),overview:overview(state)}));
+        """
+        rendered=subprocess.run(['node','--input-type=module','-e',script],input=json.dumps(domain.view(room,'host')),cwd=ROOT,check=True,capture_output=True,text=True)
+        html=json.loads(rendered.stdout)
+        compare=html['compare']
+        self.assertLess(compare.index('方案 B · V1'),compare.index('方案 A · V1'))
+        details=[x for x in Elements(compare).matching('data-proposal-detail')]
+        self.assertEqual(len(details),2)
+        self.assertIn('方案事实、步骤、费用、我的匹配与冲突',compare)
+        self.assertNotIn('自定义活动行程',compare)
+        self.assertNotIn('YOUR NEXT STEP',html['overview'])
+        self.assertNotIn('请房主先添加候选活动',html['overview'])
+        self.assertEqual(domain.display_view(room)['proposals'][0]['evaluation']['kind'],'decision')
+
+
 if __name__ == '__main__':
     unittest.main()

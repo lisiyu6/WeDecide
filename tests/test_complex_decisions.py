@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import unittest
 from pydantic import ValidationError
-from wedecide import domain, engine
+from wedecide import domain, engine, agent
 from wedecide.models import CreateRoom, Preference, Resource, Rules
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +20,23 @@ class ComplexDecisionTests(unittest.TestCase):
     def evaluate(self, room, index=0):
         resource=room['resources'][index]
         return engine.evaluate(room,[{'resource':resource,'start':600,'end':645}])
+
+    def test_agent_continues_public_goal_without_pending_members_or_private_requirements(self):
+        room=self.room({'criteria':[{'name':'私密要求','hard':True}]})
+        room['members'].append(domain.new_member('pending','未批准姓名'))
+        room['agent']={'goal':'比较长期方案','summary':'已明确优先考虑维护成本','next_step':'补齐资料','questions':['已有资料有哪些？'],'resources':[{'id':'draft','name':'待采纳方向'}]}
+        domain.analyze(room)
+        context=agent.public_context(room,'host')
+        self.assertEqual(context['agent_memory']['goal'],'比较长期方案')
+        self.assertEqual(context['pending_drafts']['resources'][0]['id'],'draft')
+        self.assertEqual([m['id'] for m in context['members']],['host'])
+        raw=json.dumps(context,ensure_ascii=False)
+        self.assertNotIn('私密要求',raw)
+        self.assertNotIn('未批准姓名',raw)
+        self.assertNotIn('dimensions',raw)
+        self.assertNotIn('share_token',context)
+        room['agent']['applied']=True
+        self.assertNotIn('pending_drafts',agent.public_context(room,'host'))
 
     def test_generic_option_does_not_require_city_or_invent_a_schedule(self):
         room=self.room({'criteria':[{'name':'可扩展','hard':True}]})

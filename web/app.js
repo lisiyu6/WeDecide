@@ -75,12 +75,13 @@ async function refresh(preserve=true) {
    if(version!==routeVersion)return;
    const sameVote=room.vote?.id===state.room.vote?.id;
    if(!sameVote){state.voteSession=null;state.dirtyForms.delete('vote-form');}
+   const oldSnapshot=JSON.stringify([state.room,state.provider,state.messages]);
    state.room=room;state.provider=provider;
    if(recent){
      const previous=state.messages.filter(m=>recent.length&&m.id<recent[0].id);
      state.messages=[...previous,...recent].slice(-300);
    }
-   render(preserve&&(state.tab!=='vote'||sameVote));
+   if(!preserve||oldSnapshot!==JSON.stringify([state.room,state.provider,state.messages]))render(preserve&&(state.tab!=='vote'||sameVote));
  }catch(error){
    if(version===routeVersion&&error.status===404){if(deletingRoom!==key)leaveDeletedRoom(state.room);}
    else if(version===routeVersion)toast(error.message,true);
@@ -153,7 +154,7 @@ async function mutate(action,payload={},revision=null) {
 }
 function readRules(d,defaults={}) {return {...defaults,threshold:Number(d.threshold)/100,fairness:Number(d.fairness)/100,max_members:Number(d.max_members),max_rounds:Number(d.max_rounds),vote_seconds:Number(d.vote_seconds),...(d.max_activities?{min_activities:Number(d.min_activities||1),max_activities:Number(d.max_activities),transfer_minutes:Number(d.transfer_minutes),transfer_cost:Number(d.transfer_cost)}:{})};}
 function readScenario(d) {return {title:d.title.trim(),city:d.city.trim(),date:d.date,description:d.description,reference_budget:number(d.reference_budget)};}
-async function resourceDialog(resource={}) {state.resourceRevision=state.room.revision;dialog(resource.id?'编辑候选活动':'添加一个候选活动',resourceForm(resource));}
+async function resourceDialog(resource={}) {state.resourceRevision=state.room.revision;dialog(resource.id?'核对备选方案':'补充备选方案',resourceForm(resource));}
 installProviderModels(form=>{
  if(form.elements.mode.value!=='custom')throw new Error('请先选择房间专用接口，再填写端点与密钥');
  return post(roomPath('/provider/models'),{provider:readProvider(form)});
@@ -233,9 +234,9 @@ async function submit(form) {
    }
    deleteDraft('wd-create');state.creationDraft={};navigate(`/r/${room.code}`);break;
   }
-  case 'agent-form':await post(roomPath('/ai'),{kind:'agent',text:d.text.trim()||'请自主判断并推进本次决策，必要时调用分析工具。'});state.room.ai_pending=true;await refresh(true);break;
+  case 'agent-form':await post(roomPath('/ai'),{kind:'agent',text:d.text.trim()||'请自主判断并推进本次决策，必要时调用分析工具。'});state.dirtyForms.delete('agent-form');form.reset();state.room.ai_pending=true;await refresh(true);break;
   case 'plan-form':{const steps=[];for(let i=0;i<5;i++){if(d[`resource_${i}`]){const start=minutes(d[`start_${i}`]);if(start==null||start<0||start>=1440)throw new Error('请填写有效的活动开始时间');steps.push({resource_id:d[`resource_${i}`],start});}}const plan={id:d.id,title:d.title,description:d.description,steps};await mutate('plans',{plans:d.id?state.room.manual_plans.map(p=>p.id===d.id?plan:p):[...state.room.manual_plans,plan]},state.planRevision);$('#dialog').close();toast('已保存行程；Agent 会按最新版本继续');break;}
-  case 'interview-form':await askInterview(d.text.trim()||'请根据本次决策场景，先了解我的喜好，再按我的回答动态追问，最后整合需求表。');break;
+  case 'interview-form':await askInterview(d.text.trim()||'请开始了解我的想法，并自主判断最有价值的下一问。');break;
   case 'preference-form':{
    if(form.dataset.locked==='true'||form.dataset.saving==='true')return;
    const step=Number(form.dataset.prefStep||0);
@@ -273,7 +274,7 @@ async function submit(form) {
    const attributes={};for(const line of (d.attributes||'').split('\n').map(s=>s.trim()).filter(Boolean)){const match=line.match(/^(.+?)\s*[=：:]\s*(是|否|true|false|有|无)$/);if(!match)throw new Error('属性请按“名称=是”或“名称=否”填写，无法判断时留空');attributes[match[1].trim()]=['是','true','有'].includes(match[2]);}
    const resource={kind:d.kind||'activity',description:d.description||'',steps:(d.steps||'').split('\n').map(s=>s.trim()).filter(Boolean),attributes,id:d.id,name:d.name.trim(),category:d.category.trim(),location:d.location.trim(),cost:number(d.cost),cost_upper:number(d.cost_upper),fixed_cost:number(d.fixed_cost),start:minutes(d.start),end:minutes(d.end),duration:number(d.duration),source:d.source,source_url:d.source_url.trim(),confirmed:form.elements.confirmed.checked,verified:form.elements.verified.checked};
    const resources=d.id?state.room.resources.map(r=>r.id===d.id?resource:r):[...state.room.resources,resource];
-   await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('候选活动已保存');break;
+   await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('备选方案已保存，Agent 将按新信息继续');break;
   }
   case 'room-settings':await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
   case 'room-provider':{
@@ -318,6 +319,7 @@ document.addEventListener('change',event=>{
  const form=event.target.form;
  if(formId(form)==='room-provider'&&event.target.name==='mode')$('#custom-provider-fields').hidden=event.target.value!=='custom';
  if(formId(form)==='fairness-sim')render(true);
+ if(formId(form)==='resource-form'&&event.target.name==='kind'){$('[data-activity-fields]',form).hidden=event.target.value==='decision';}
 });
 document.addEventListener('toggle',event=>{if(event.target.id==='preference-ai')state.prefAiOpen=event.target.open;},true);
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.menu)handlers.menu();});
@@ -334,5 +336,5 @@ function countdown(){
 setInterval(countdown,1000);
 setInterval(()=>{if(state.route==='room'&&!state.connected)void refresh(true);},10000);
 async function showDisplay(token,version){
- try{const d=await api(`/api/display/${encodeURIComponent(token)}`);if(version!==routeVersion)return;$('#app').innerHTML=`<main id="main" class="showcase"><div class="between">${logo}<span class="badge">只读投屏 · 自动更新</span></div><h1>${esc(d.scenario.title)}</h1><p class="muted">${esc(d.scenario.city)} · ${esc(d.scenario.date)} · ${labels[d.state]||d.state}</p><div class="three-columns"><div class="card metric"><div class="metric-label">有效参与</div><div class="metric-value">${d.member_count} 人</div></div><div class="card metric"><div class="metric-label">已确认需求</div><div class="metric-value">${d.ready_count} 人</div></div><div class="card metric"><div class="metric-label">正式投票轮次</div><div class="metric-value">${d.vote?.round||d.round||'—'}</div></div></div><div class="proposal-grid">${d.proposals.map(p=>`<div class="card proposal"><h2>${esc(p.title)}</h2><div class="proposal-score"><strong>${score(p.evaluation.score)}</strong><small>群体预测分 · 覆盖 ${p.evaluation.coverage.join('/')}</small></div>${badge(p.evaluation.status)}<p class="hint" style="margin-top:18px">${money(p.evaluation.cost)} / 人 · ${time(p.evaluation.start)} – ${time(p.evaluation.end)}</p></div>`).join('')}</div>${d.vote?`<div class="card" style="margin-top:25px"><div class="between"><h2>投票进度 ${d.vote.submitted} / ${d.vote.total}</h2>${badge(d.vote.status)}</div><p class="hint" style="margin-top:10px">至少 ${d.vote.required} 人明确接受 · 截止 ${dateTime(d.vote.deadline)}</p></div>`:''}<p class="hint" style="margin-top:30px">投屏只展示汇总信息，不展示成员的私密条件、消息与理由。</p></main>`;}catch(error){if(version===routeVersion)$('#app').innerHTML=`<div class="waiting">${empty('投屏暂不可用',error.message)}</div>`;}}
+ try{const d=await api(`/api/display/${encodeURIComponent(token)}`);if(version!==routeVersion)return;$('#app').innerHTML=`<main id="main" class="showcase"><div class="between">${logo}<span class="badge">只读投屏 · 自动更新</span></div><h1>${esc(d.scenario.title)}</h1><p class="muted">${esc(d.scenario.city)} · ${esc(d.scenario.date)} · ${labels[d.state]||d.state}</p><div class="three-columns"><div class="card metric"><div class="metric-label">有效参与</div><div class="metric-value">${d.member_count} 人</div></div><div class="card metric"><div class="metric-label">已确认需求</div><div class="metric-value">${d.ready_count} 人</div></div><div class="card metric"><div class="metric-label">正式投票轮次</div><div class="metric-value">${d.vote?.round||d.round||'—'}</div></div></div><div class="proposal-grid">${d.proposals.map(p=>`<div class="card proposal"><h2>${esc(p.title)}</h2><div class="proposal-score"><strong>${score(p.evaluation.score)}</strong><small>群体预测分 · 覆盖 ${p.evaluation.coverage.join('/')}</small></div>${badge(p.evaluation.status)}<p class="hint" style="margin-top:18px">${money(p.evaluation.cost)} / 人 · ${p.evaluation.kind==='decision'?'通用备选':time(p.evaluation.start)+' – '+time(p.evaluation.end)}</p></div>`).join('')}</div>${d.vote?`<div class="card" style="margin-top:25px"><div class="between"><h2>投票进度 ${d.vote.submitted} / ${d.vote.total}</h2>${badge(d.vote.status)}</div><p class="hint" style="margin-top:10px">至少 ${d.vote.required} 人明确接受 · 截止 ${dateTime(d.vote.deadline)}</p></div>`:''}<p class="hint" style="margin-top:30px">投屏只展示汇总信息，不展示成员的私密条件、消息与理由。</p></main>`;}catch(error){if(version===routeVersion)$('#app').innerHTML=`<div class="waiting">${empty('投屏暂不可用',error.message)}</div>`;}}
 void route();

@@ -120,7 +120,8 @@ class ProviderFixture(BaseHTTPRequestHandler):
             content=json.dumps(output,ensure_ascii=False)
         elif 'Interview JSON Schema' in body['messages'][0]['content']:
             last=body['messages'][-1]['content']
-            ready='整合' in last
+            instruction=last.rsplit('我的输入：\n',1)[-1]
+            ready='请整合当前回答' in instruction or '请先把已有回答整合' in instruction
             content=json.dumps({'question':'' if ready else '你更希望这次活动带来怎样的体验？', 'left':'' if ready else '轻松聊天', 'right':'' if ready else '探索新体验', 'summary':'根据你的回答，优先考虑轻松交流。', 'ready':ready, 'draft':{'categories':{'休闲':100},'criteria':[{'name':'适合聊天','rating':100}], 'cost_preference':'lower'}, 'insights':['预算具体金额由本人填写']},ensure_ascii=False)
         elif 'Comparison JSON Schema' in body['messages'][0]['content']:
             content=json.dumps({'summary':'先核对可行方案的行程和未确认资料。','reasons':['根据已提供的行程与费用进行比较'],'risks':['缺失资料需要房主补充'],'next_steps':['本人核对需求后再发起正式投票']},ensure_ascii=False)
@@ -444,6 +445,7 @@ class ApiWorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code,202,response.text)
         answer=self.replies(guest,room)[0]
         self.assertIn('体验',answer['metadata']['interview']['question'])
+        self.assertFalse(answer['metadata']['interview']['ready'])
         self.assertEqual(answer['metadata']['draft']['criteria'][0]['name'],'适合聊天')
         self.assertEqual(answer['metadata']['request_id'],'first')
         self.assertFalse(guest.get(path).json()['me']['confirmed'])

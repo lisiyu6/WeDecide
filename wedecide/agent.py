@@ -4,7 +4,7 @@ import asyncio
 from . import ai, domain, engine, store
 from .models import DecisionAgentTurn
 
-PROMPT = """你是 WeDecide 多人决策 Agent，主动主持从目标澄清、需求收集、提出备选、比较取舍到协商的决策过程。不要把用户局限到某个固定问卷或活动模板。根据当前目标和缺口自主判断下一步，给出简洁、具体、可执行的总结与下一步。仅使用公开资料、本人已授权公开的摘要和匿名约束核对结果；不要推断或暴露成员私聊、原始私密条件或拒绝理由。
+PROMPT = """你是 WeDecide 多人决策 Agent，主动主持从目标澄清、需求收集、提出备选、比较取舍到协商的决策过程。不要把用户局限到某个固定问卷或活动模板。承接 agent_memory 中仍适用的目标和结论，遇到新信息时明确修正原因，避免把每轮当成首次对话。根据当前目标和缺口自主判断下一步，给出简洁、具体、可执行的总结与下一步。仅使用公开资料、本人已授权公开的摘要和匿名约束核对结果；不要推断或暴露成员私聊、原始私密条件或拒绝理由。
 你有 analyze 工具：当全体需求已确认且已有候选时，可以请求 tool=analyze，系统会真正运行校核工具，把结果交给你，再由你继续分析。不能分析时应解释缺少什么并 tool=respond。一次任务最多调用三轮模型，不重复请求相同工具。
 需要新增备选时，在 resources 提出待采纳的候选草稿：普通选题、购买或策略比较使用 kind=decision，description 说明方案，steps 写执行步骤；只有具体活动行程才用 kind=activity。可自行提出与本次目标有关的 attributes，不预设穷举维度。属性仅从已知资料提取，无法判断就省略。未知价格用 null，不虚构商家、报价、核验链接和事实。新增候选用唯一 id（方案 steps 的 resource_id 须匹配已有或新增候选）。所有新增条目必须 confirmed=false、verified=false。
 需要多步骤活动时可以输出 plans，使用已知或建议的资源 id 和一天内分钟数安排，每个最多五项；不适合活动排程的决策，直接比较通用备选，不强行填时间、城市和行程。
@@ -13,11 +13,17 @@ PROMPT = """你是 WeDecide 多人决策 Agent，主动主持从目标澄清、�
 
 def public_context(room, user_id):
     visible = domain.view(room, user_id)
+    visible['members'] = [m for m in visible['members'] if m['status'] == 'approved']
+    previous = room.get('agent') or {}
+    visible['agent_memory'] = {key: previous[key] for key in ('goal', 'summary', 'next_step', 'questions') if previous.get(key)}
+    if not previous.get('applied') and not previous.get('error'):
+        visible['pending_drafts'] = {key: previous[key] for key in ('resources', 'plans') if previous.get(key)}
     for key in ('me', 'requests', 'share_token', 'provider_id', 'feedback', 'agent'):
         visible.pop(key, None)
     def strip(value):
         if isinstance(value, dict):
             value.pop('dimensions', None)
+            value.pop('my_vote', None)
             for child in value.values():
                 strip(child)
         elif isinstance(value, list):

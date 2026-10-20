@@ -61,7 +61,7 @@ def invalidate(room, text):
 def analyze(room, prepared=None):
     members = engine.active_members(room)
     require(members and all(m["confirmed"] for m in members), "所有有效成员必须先确认个人需求")
-    require(room["resources"], "请先添加候选活动")
+    require(room["resources"], "请先采纳或补充备选方案")
     if room["proposals"]:
         room["history"].append({"version": room["analysis_version"], "proposals": room["proposals"], "at": time.time()})
         room["history"] = room["history"][-10:]
@@ -394,4 +394,4 @@ def view(room, user_id, online=()):
 
 
 def display_view(room):
-    return {"scenario": room["scenario"], "state": room["state"], "member_count": len(engine.active_members(room)), "ready_count": sum(m["confirmed"] for m in engine.active_members(room)), "round": room["round"], "proposals": [{"title": p["title"], "evaluation": {k: p["evaluation"][k] for k in ("status", "score", "average", "minimum", "coverage", "cost", "start", "end")}} for p in room["proposals"]], "vote": {"deadline": room["vote"]["deadline"], "status": room["vote"]["status"], "submitted": len(room["vote"]["votes"]), "total": len(room["vote"]["electorate"]), "round": room["vote"]["round"], "required": room["vote"]["required"]} if room["vote"] else None, "result": {"outcome": room["result"]["outcome"]} if room["result"] else None}
+    return {"scenario": room["scenario"], "state": room["state"], "member_count": len(engine.active_members(room)), "ready_count": sum(m["confirmed"] for m in engine.active_members(room)), "round": room["round"], "proposals": [{"title": p["title"], "evaluation": {k: p["evaluation"][k] for k in ("status", "score", "average", "minimum", "coverage", "cost", "start", "end")} | {"kind":p["evaluation"].get("kind", "activity")}} for p in room["proposals"]], "vote": {"deadline": room["vote"]["deadline"], "status": room["vote"]["status"], "submitted": len(room["vote"]["votes"]), "total": len(room["vote"]["electorate"]), "round": room["vote"]["round"], "required": room["vote"]["required"]} if room["vote"] else None, "result": {"outcome": room["result"]["outcome"]} if room["result"] else None}
