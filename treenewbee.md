@@ -1,4 +1,4 @@
-[WeDecide_核心功能亮点与创新性展示稿.md](https://github.com/user-attachments/files/33698570/WeDecide_.md)
+基于设计文件的 [WeDecide_核心功能亮点与创新性展示稿.md](https://github.com/user-attachments/files/33698570/WeDecide_.md)
 # WeDecide 核心功能亮点与创新性展示稿
 
 > 项目定位：AI 群体协商与决策平台  
