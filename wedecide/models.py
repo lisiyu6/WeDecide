@@ -239,6 +239,24 @@ class Login(Model):
     password: str = Field(min_length=1, max_length=256)
 
 
+InterviewTarget = Literal["budget_max","budget_target","budget_weight","cost_preference","available_start","available_end","max_duration","preferred_start","preferred_end","time_weight","categories","activity_weight","excluded_categories","allowed_locations","criteria"]
+
+
+class InterviewInputCall(Model):
+    tool: Literal["request_input"] = "request_input"
+    choice: Literal["left", "right"]
+    field: InterviewTarget
+    label: str = Field(min_length=1, max_length=80)
+    placeholder: str = Field(default="", max_length=160)
+
+    @field_validator("label")
+    @classmethod
+    def meaningful_label(cls, value):
+        if not value.strip():
+            raise ValueError("输入卡片需要明确的填写说明")
+        return value.strip()
+
+
 class InterviewResult(Model):
     question: str = Field(default="", max_length=500)
     left: str = Field(default="", max_length=120)
@@ -246,9 +264,10 @@ class InterviewResult(Model):
     summary: str = Field(default="", max_length=3000)
     insights: list[str] = Field(default_factory=list, max_length=10)
     ready: bool = False
-    targets: list[Literal["budget_max","budget_target","budget_weight","cost_preference","available_start","available_end","max_duration","preferred_start","preferred_end","time_weight","categories","activity_weight","excluded_categories","allowed_locations","criteria"]] = Field(default_factory=list,max_length=4)
+    targets: list[InterviewTarget] = Field(default_factory=list, max_length=4)
     purpose: str = Field(default="",max_length=240)
     draft: Preference
+    tool_calls: list[InterviewInputCall] = Field(default_factory=list, max_length=2)
 
     @model_validator(mode="after")
     def real_question(self):

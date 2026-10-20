@@ -26,7 +26,7 @@ class PreferenceTemplateTests(unittest.TestCase):
     def setUpClass(cls):
         script = """
           import {preferenceEditor} from './web/preferences.js';
-          const room={id:'test-room',state:'COLLECTING',resources:[],
+          const room={id:'test-room',state:'COLLECTING',scenario:{title:'共同决定'},resources:[],
             me:{preference:null,preference_version:0,confirmed:false}};
           console.log(JSON.stringify({editor:preferenceEditor({room,prefStep:0,messages:[]})}));
         """
@@ -48,7 +48,7 @@ class PreferenceTemplateTests(unittest.TestCase):
     def test_swipe_card_stays_present_after_summary_and_confirmation(self):
         script="""
           import {preferenceEditor} from './web/preferences.js';
-          const room={id:'r',state:'COLLECTING',resources:[],me:{preference:{},preference_version:1,confirmed:true}};
+          const room={id:'r',state:'COLLECTING',scenario:{title:'共同决定'},resources:[],me:{preference:{},preference_version:1,confirmed:true}};
           const messages=[{id:2,role:'assistant',kind:'interview',metadata:{preference_version:1,draft:{},interview:{ready:true,summary:'已整理你的想法'}}}];
           console.log(JSON.stringify([preferenceEditor({room,messages:[],prefStep:0}),preferenceEditor({room,messages,prefStep:0})]));
         """
