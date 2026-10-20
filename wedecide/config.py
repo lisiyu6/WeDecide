@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import sysconfig
+from .prompts import PRESETS
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
@@ -19,5 +20,5 @@ DEFAULT_SETTINGS = {
     "revision": 1,
     "max_rooms": 16, "max_members": 8, "ai_concurrency": 4, "ai_queue_limit": 32,
     "room_idle_hours": 48, "retention_days": 7, "providers": [], "default_provider": "",
-    "prompts": {"context": "", "chat": "", "preferences": "", "scenario": "", "negotiate": ""},
+    "prompts": {key: "" for key in PRESETS},
 }

@@ -68,7 +68,9 @@ def settings(db=None):
         with connect() as conn:
             return settings(conn)
     row = db.execute("SELECT value FROM settings WHERE key='config'").fetchone()
-    return {**deepcopy(DEFAULT_SETTINGS), **json.loads(row[0])}
+    result={**deepcopy(DEFAULT_SETTINGS), **json.loads(row[0])}
+    result["prompts"]={**DEFAULT_SETTINGS["prompts"],**result.get("prompts",{})}
+    return result
 
 
 def load_room(db, key):

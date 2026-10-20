@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from . import accounts, agent, ai, domain, engine, store
+from . import accounts, agent, ai, domain, engine, store, prompts
 from .cli import verify_password
 from .config import WEB_DIR, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
 from .models import DateInput, AIInput, CreateRoom, JoinRoom, Login, ModelDiscovery, Mutation
@@ -53,6 +53,7 @@ def current_room(key):
 
 def safe_config(config):
     result = {**config, "providers": [ai.redact_provider(p) for p in config["providers"]]}
+    result.update(prompt_catalog=prompts.catalog(config),prompt_preset_version=prompts.PRESET_VERSION,prompt_rules=prompts.BASE_PROMPT)
     return result
 
 
@@ -568,9 +569,9 @@ async def admin_save(request: Request):
         domain.require(len({p["id"] for p in config["providers"]}) == len(providers), "供应商 ID 不能重复")
         config["default_provider"] = str(data.get("default_provider", config["default_provider"]))[:48]
         domain.require(not config["default_provider"] or any(p["id"] == config["default_provider"] and p["enabled"] for p in config["providers"]), "默认接口不存在或未启用")
-        prompts = data.get("prompts", config["prompts"])
-        domain.require(isinstance(prompts, dict) and all(isinstance(v, str) and len(v) <= 12000 for v in prompts.values()), "提示词格式不正确或过长")
-        config["prompts"] = {k: prompts.get(k, "") for k in ("context", "chat", "preferences", "scenario", "negotiate")}
+        incoming_prompts = data.get("prompts", {})
+        domain.require(isinstance(incoming_prompts, dict) and set(incoming_prompts)<=set(prompts.PRESETS) and all(isinstance(v, str) and len(v) <= 12000 for v in incoming_prompts.values()), "提示词阶段无效、格式不正确或超过 12000 字")
+        config["prompts"] = {key:incoming_prompts.get(key,config["prompts"].get(key,"")) for key in prompts.PRESETS}
         db.execute("UPDATE settings SET value=? WHERE key='config'", (store.dumps(config),))
     async with coordinator.condition:
         coordinator.condition.notify_all()
