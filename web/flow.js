@@ -1,5 +1,5 @@
 import {esc,terminal} from './common.js';
-const stages=[['overview','想法与需求'],['compare','整理与比较'],['vote','正式投票'],['result','决策结果']];
+const stages=[['overview','表达与提议'],['compare','比较与协商'],['vote','正式投票'],['result','决策结果']];
 export function decisionFlow(state){
  const r=state.room,members=r.members.filter(m=>m.status==='approved'),ready=members.filter(m=>m.confirmed).length,host=r.me.id===r.host_id;
  const proposals=r.proposals.filter(p=>p.input_version===r.input_version),selected=proposals.find(p=>p.id===r.selected_id&&p.evaluation.status==='FEASIBLE');
@@ -12,10 +12,18 @@ export function decisionFlow(state){
  else if(!r.resources.length){hint='你的需求已确认。还需要可比较的备选，可以从左侧提交想法或让 AI 整理。';action='suggestions-open';label='提出备选想法';}
  else if(r.resources.some(item=>!item.confirmed)){hint=host?'已有候选资料，需由你核对后再用于正式方案比较。':'已有候选资料，等待房主核对；你的需求已保留。';target=host?'settings':'compare';label=host?'核对候选资料':'查看已有候选';}
  else if(ready<members.length){hint=`需求已确认 ${ready} / ${members.length} 人。等待其他成员确认，仍可继续提议和补充。`;action='suggestions-open';label='查看大家的提议';}
- else if(!proposals.length){hint='需求和候选已准备好，下一步由 Agent 整理并调用校核，形成可比较方案。';if(host){action='run-agent';label='让 AI 整理与校核';}}
+ else if(!proposals.length){hint='需求和候选已准备好，会根据全体已确认需求进行校核，形成可比较方案。';if(host){action='run-agent';label='整理并校核共同方案';}}
  else if(selected){hint=host?'已选定当前有效方案，下一步锁定本轮名单并发起正式投票。':'房主已选定当前方案，等待发起正式投票。';if(host){action='start_vote';label='发起正式投票';}else{target='compare';label='查看选定方案';}}
  else{hint=proposals.some(p=>p.evaluation.status==='FEASIBLE')?'已有可行方案。比较具体安排和取舍，再由房主选定待投票方案。':'当前候选仍有冲突或资料缺项，先补充事实或调整备选。';target='compare';label='查看比较与缺项';}
- const disabled=r.agent_pending||r.ai_pending;
+ const disabled=r.agent_pending;
  const next=action?`<button type="button" class="button secondary small" data-action="${action}" ${disabled&&action==='run-agent'?'disabled':''}>${label}</button>`:target&&target!==state.tab?`<a class="button secondary small" data-nav href="/r/${esc(r.code)}?view=${target}">${label}</a>`:'';
- return `<section class="decision-flow" aria-label="决策进度与下一步"><nav class="decision-flow-steps" aria-label="决策过程">${stages.map(([view,text],i)=>`<a data-nav href="/r/${esc(r.code)}?view=${view}" ${i===phase?'aria-current="step"':''}><span>${i+1}</span>${text}</a>`).join('')}</nav><div class="decision-flow-next"><p>${esc(hint)}</p>${next}</div></section>`;
+ return `<section class="decision-flow" aria-label="决策进度与下一步"><nav class="decision-flow-steps" aria-label="决策过程">${stages.map(([view,text],i)=>`<a data-nav href="/r/${esc(r.code)}?view=${view==='overview'&&!r.me.confirmed&&!ended&&r.state!=='VOTING'?'preferences':view}" ${i===phase?'aria-current="step"':''}><span>${i+1}</span>${text}</a>`).join('')}</nav><div class="decision-flow-next"><p>${esc(hint)}</p>${next}</div></section>`;
+}
+
+export function defaultDecisionView(room){
+ if(terminal.has(room.state))return 'result';
+ if(room.state==='VOTING')return 'vote';
+ if(!room.me.confirmed)return 'preferences';
+ if(['COMPARING','NEGOTIATING'].includes(room.state))return 'compare';
+ return 'overview';
 }

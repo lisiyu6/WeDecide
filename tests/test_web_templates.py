@@ -143,7 +143,7 @@ class ContinuousInputTemplateTests(unittest.TestCase):
         html=json.loads(result.stdout)
         self.assertEqual(len([attrs for tag,attrs in Elements(html['knowledge']).nodes if tag=='form' and attrs.get('id')=='knowledge-form']),1)
         self.assertIn('name="visibility"',html['notes'])
-        self.assertIn('仅本人可见，交给房间 Agent 私密整理',html['notes'])
+        self.assertIn('仅本人可见，整理为我的需求',html['notes'])
         self.assertIn('data-action="resolve-date"',html['create'])
         self.assertIn('name="date_expression"',html['create'])
 
@@ -210,7 +210,7 @@ class ZenFlowTemplateTests(unittest.TestCase):
         html=json.loads(result.stdout)
         self.assertEqual(len(Elements(html['compare']).matching('data-proposal-id')),1)
         self.assertIn('下一个方案',html['compare'])
-        self.assertIn('data-focus-nav',html['layout'])
+        self.assertIn('aria-label="空间操作"',html['layout'])
         self.assertIn('退出禅模式',html['layout'])
 
 

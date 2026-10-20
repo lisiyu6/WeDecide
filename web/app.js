@@ -1,3 +1,4 @@
+import {defaultDecisionView} from './flow.js';
 import {buildCreationScenario} from './creation.js';
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score,themeControl} from './common.js';
 import {contextDrawer,mountContextDrawer,resolveDate} from './context.js';
@@ -14,7 +15,7 @@ const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
 const chatKey=()=>`wd-chat:${state.room.id}:${state.room.me.id}:${state.chatMode}`;
 function leaveDeletedRoom(room,message='房主已删除这个空间，已返回首页') {
  deleteDraft(`wd-pref:${room.id}:${room.me.id}`);
- deleteDraft(`wd-context:${room.id}:${room.me.id}`);deleteDraft(`wd-knowledge:${room.id}:${room.me.id}`);
+ deleteDraft(`wd-context:${room.id}:${room.me.id}`);deleteDraft(`wd-knowledge:${room.id}:${room.me.id}`);deleteDraft(`wd-suggestion:${room.id}:${room.me.id}`);deleteDraft(`wd-interview:${room.id}:${room.me.id}`);
  for(const mode of ['private','shared'])deleteDraft(`wd-chat:${room.id}:${room.me.id}:${mode}`);
  if(state.room?.id!==room.id)return;
  stream?.close();stream=null;
@@ -83,6 +84,7 @@ async function refresh(preserve=true) {
    const sameVote=room.vote?.id===state.room.vote?.id;
    if(!sameVote){state.voteSession=null;state.dirtyForms.delete('vote-form');}
    const oldSnapshot=JSON.stringify([state.room,state.provider,state.messages]);
+   if(state.room.me.status!=='approved'&&room.me.status==='approved')state.tab=defaultDecisionView(room);
    state.room=room;state.provider=provider;
    if(recent){
      const previous=state.messages.filter(m=>recent.length&&m.id<recent[0].id);
@@ -117,7 +119,7 @@ async function route() {
    if(parts[0]==='new'){if(!state.bootstrap.account){showAccount('/new');return;}state.route='new';state.room=null;render();return;}
    if(parts[0]==='r'&&parts[1]){
      const code=parts[1];
-     const tab=tabs.some(t=>t[0]===url.searchParams.get('view'))?url.searchParams.get('view'):'overview';
+     let tab=tabs.some(t=>t[0]===url.searchParams.get('view'))?url.searchParams.get('view'):null;
      const previousRoom=state.room?.id;
      let room;
      try{room=await api(`/api/rooms/${encodeURIComponent(code)}`);}catch(error){
@@ -126,6 +128,7 @@ async function route() {
        throw error;
      }
      if(version!==routeVersion)return;
+     tab=tab||defaultDecisionView(room);
      let messages=[],provider=null;
      if(room.me.status==='approved'){
        [messages,provider]=await Promise.all([
@@ -209,7 +212,7 @@ const handlers={
  'account-logout':async()=>{await post('/api/auth/logout');stream?.close();state.bootstrap=null;state.room=null;state.messages=[];state.prefDraft=null;state.creationDraft={};deleteDraft('wd-create');navigate('/');},
  'refresh':()=>refresh(true),
  'toggle-agent':el=>mutate('agent_toggle',{enabled:el.dataset.enabled==='true'}),
- 'run-agent':async()=>{await post(roomPath('/ai'),{kind:'agent',text:'请主动推进本次决策，判断现在该澄清目标、了解成员、提出备选、调用校核还是比较协商。'});state.room.ai_pending=true;await refresh(true);},
+ 'run-agent':async()=>{await post(roomPath('/ai'),{kind:'agent',text:'请结合本次共同目标、公开提议和全体已确认需求继续整理。已有可比候选时调用实际校核，解释群体取舍；仍有缺项时指出具体资料，不重复访谈成员。'});state.room.agent_pending=true;await refresh(true);},
  'apply-agent-draft':()=>mutate('agent_draft').then(()=>toast('已采纳为待核对候选；请在房间设置核对事实')),
  'plan-new':()=>{state.planRevision=state.room.revision;dialog('手动编排活动行程',manualPlanForm(state.room));},
  'plan-edit':el=>{state.planRevision=state.room.revision;dialog('编辑活动行程',manualPlanForm(state.room,state.room.manual_plans.find(p=>p.id===el.dataset.id)));},
@@ -284,8 +287,7 @@ async function submit(form) {
    }
    deleteDraft('wd-create');state.creationDraft={};navigate(`/r/${room.code}`);break;
   }
-  case 'agent-form':await post(roomPath('/ai'),{kind:'agent',text:d.text.trim()||'请自主判断并推进本次决策，必要时调用分析工具。'});state.dirtyForms.delete('agent-form');form.reset();state.room.ai_pending=true;await refresh(true);break;
-  case 'plan-form':{const steps=[];for(let i=0;i<5;i++){if(d[`resource_${i}`]){const start=minutes(d[`start_${i}`]);if(start==null||start<0||start>=1440)throw new Error('请填写有效的活动开始时间');steps.push({resource_id:d[`resource_${i}`],start});}}const plan={id:d.id,title:d.title,description:d.description,steps};await mutate('plans',{plans:d.id?state.room.manual_plans.map(p=>p.id===d.id?plan:p):[...state.room.manual_plans,plan]},state.planRevision);$('#dialog').close();toast('已保存行程；Agent 会按最新版本继续');break;}
+  case 'plan-form':{const steps=[];for(let i=0;i<5;i++){if(d[`resource_${i}`]){const start=minutes(d[`start_${i}`]);if(start==null||start<0||start>=1440)throw new Error('请填写有效的活动开始时间');steps.push({resource_id:d[`resource_${i}`],start});}}const plan={id:d.id,title:d.title,description:d.description,steps};await mutate('plans',{plans:d.id?state.room.manual_plans.map(p=>p.id===d.id?plan:p):[...state.room.manual_plans,plan]},state.planRevision);$('#dialog').close();toast('已保存行程，将按全体最新条件重新评价');break;}
   case 'interview-form':await askInterview(d.text.trim()||'请开始了解我的想法，并自主判断最有价值的下一问。');break;
   case 'preference-form':{
    if(form.dataset.locked==='true'||form.dataset.saving==='true')return;
@@ -324,11 +326,11 @@ async function submit(form) {
    const attributes={};for(const line of (d.attributes||'').split('\n').map(s=>s.trim()).filter(Boolean)){const match=line.match(/^(.+?)\s*[=：:]\s*(是|否|true|false|有|无)$/);if(!match)throw new Error('属性请按“名称=是”或“名称=否”填写，无法判断时留空');attributes[match[1].trim()]=['是','true','有'].includes(match[2]);}
    const resource={kind:d.kind||'activity',description:d.description||'',steps:(d.steps||'').split('\n').map(s=>s.trim()).filter(Boolean),attributes,id:d.id,name:d.name.trim(),category:d.category.trim(),location:d.location.trim(),cost:number(d.cost),cost_upper:number(d.cost_upper),fixed_cost:number(d.fixed_cost),start:minutes(d.start),end:minutes(d.end),duration:number(d.duration),source:d.source,source_url:d.source_url.trim(),confirmed:form.elements.confirmed.checked,verified:form.elements.verified.checked};
    const resources=d.id?state.room.resources.map(r=>r.id===d.id?resource:r):[...state.room.resources,resource];
-   await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('备选方案已保存，Agent 将按新信息继续');break;
+   await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('备选方案已保存，会按全体最新条件继续整理');break;
   }
-  case 'knowledge-form':await saveRoomContext('knowledge',{text:d.text,knowledge_version:Number(d.knowledge_version)});toast('前置知识已更新，房间 Agent 会统一参考');break;
-  case 'suggestion-form':await saveRoomContext('supplement',{kind:'suggestion',visibility:'shared',title:d.title,text:d.text});toast('提议已公开保存，房间 Agent 会统一参考。');break;
-  case 'supplement-form':await saveRoomContext('supplement',{title:d.title,text:d.text,visibility:d.visibility});toast(state.room.state==='VOTING'?'补充已记录，本轮投票不受影响':'补充已保存，房间 Agent 将'+(d.visibility==='shared'?'用于共同决策':'整理为待确认的需求草稿'));break;
+  case 'knowledge-form':await saveRoomContext('knowledge',{text:d.text,knowledge_version:Number(d.knowledge_version)});toast('前置知识已更新，将用于本次共同决策');break;
+  case 'suggestion-form':await saveRoomContext('supplement',{kind:'suggestion',visibility:'shared',title:d.title,text:d.text});toast('提议已公开保存，将结合共同目标继续整理。');break;
+  case 'supplement-form':await saveRoomContext('supplement',{title:d.title,text:d.text,visibility:d.visibility});toast(state.room.state==='VOTING'?'补充已记录，本轮投票不受影响':'补充已保存，将'+(d.visibility==='shared'?'用于共同决策':'整理为待确认的需求草稿'));break;
   case 'room-settings':if(d.date_expression?.trim()&&form.elements.date.dataset.expression!==d.date_expression.trim()){const resolved=await resolveFormDate(form);if(!resolved)return;d.date=resolved.date;}await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
   case 'room-provider':{
    await api(roomPath('/provider'),{method:'PUT',body:{revision:state.formRevisions[formId(form)]??state.room.revision,provider_id:d.provider_id,provider:d.mode==='custom'?readProvider(form):null}});
@@ -380,7 +382,6 @@ document.addEventListener('input',event=>{
 });
 document.addEventListener('change',event=>{
  const form=event.target.form;
- if(event.target.hasAttribute('data-focus-nav')){navigate(`/r/${state.room.code}?view=${event.target.value}`);return;}
  if(formId(form)==='room-provider'&&event.target.name==='mode')$('#custom-provider-fields').hidden=event.target.value!=='custom';
  if(formId(form)==='fairness-sim')render(true);
  if(formId(form)==='resource-form'&&event.target.name==='kind'){$('[data-activity-fields]',form).hidden=event.target.value==='decision';}
@@ -416,3 +417,5 @@ setInterval(()=>{if(state.route==='room'&&!state.connected)void refresh(true);},
 async function showDisplay(token,version){
  try{const d=await api(`/api/display/${encodeURIComponent(token)}`);if(version!==routeVersion)return;$('#app').innerHTML=`<main id="main" class="showcase"><div class="between">${logo}${themeControl}<span class="badge">只读投屏 · 自动更新</span></div><h1>${esc(d.scenario.title)}</h1><p class="muted">${esc(d.scenario.city)} · ${esc(d.scenario.date)} · ${labels[d.state]||d.state}</p><div class="three-columns"><div class="card metric"><div class="metric-label">有效参与</div><div class="metric-value">${d.member_count} 人</div></div><div class="card metric"><div class="metric-label">已确认需求</div><div class="metric-value">${d.ready_count} 人</div></div><div class="card metric"><div class="metric-label">正式投票轮次</div><div class="metric-value">${d.vote?.round||d.round||'—'}</div></div></div><div class="proposal-grid">${d.proposals.map(p=>`<div class="card proposal"><h2>${esc(p.title)}</h2><div class="proposal-score"><strong>${score(p.evaluation.score)}</strong><small>群体预测分 · 覆盖 ${p.evaluation.coverage.join('/')}</small></div>${badge(p.evaluation.status)}<p class="hint" style="margin-top:18px">${money(p.evaluation.cost)} / 人 · ${p.evaluation.kind==='decision'?'通用备选':time(p.evaluation.start)+' – '+time(p.evaluation.end)}</p></div>`).join('')}</div>${d.vote?`<div class="card" style="margin-top:25px"><div class="between"><h2>投票进度 ${d.vote.submitted} / ${d.vote.total}</h2>${badge(d.vote.status)}</div><p class="hint" style="margin-top:10px">至少 ${d.vote.required} 人明确接受 · 截止 ${dateTime(d.vote.deadline)}</p></div>`:''}<p class="hint" style="margin-top:30px">投屏只展示汇总信息，不展示成员的私密条件、消息与理由。</p></main>`;}catch(error){if(version===routeVersion)$('#app').innerHTML=`<div class="waiting">${empty('投屏暂不可用',error.message)}</div>`;}}
 void route();
+
+document.addEventListener('pointerdown',event=>{for(const menu of document.querySelectorAll('.focus-space-menu[open]'))if(!menu.contains(event.target))menu.open=false;});

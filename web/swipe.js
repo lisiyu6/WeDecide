@@ -1,7 +1,14 @@
 /* One visible decision card. A choice is committed only after its exit animation. */
 export function installSwipe(card,signal){
  if(!card)return;
- const resize=()=>{const top=card.parentElement.getBoundingClientRect().top,height=window.visualViewport?.height||innerHeight;card.style.setProperty('--card-available',`${Math.max(220,height-Math.max(0,top)-145)}px`);};
+ const resize=()=>{
+  const top=card.parentElement.getBoundingClientRect().top,height=window.visualViewport?.height||innerHeight,content=card.querySelector('.interview-content');
+  // Give ordinary questions their natural height; only long content scrolls.
+  const chrome=content?card.clientHeight-content.clientHeight:0;
+  const needed=content?Math.min(content.scrollHeight,height*.55)+chrome:0;
+  const available=Math.max(innerWidth<=600?300:320,height-Math.max(0,top)-120,Math.min(needed,height*.85));
+  card.style.setProperty('--card-available',`${available}px`);
+ };
  resize();window.addEventListener('resize',resize,{signal});window.visualViewport?.addEventListener('resize',resize,{signal});
  const opts={signal};let drag=null,busy=false,dispatching=false,animation=null,timer=null;
  const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
