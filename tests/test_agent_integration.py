@@ -112,6 +112,22 @@ class AlgorithmAgentTests(unittest.TestCase):
         self.assertEqual(metadata['agent']['tool_results'][0]['tool'],'analyze')
         self.assertEqual(metadata['mode'],'preserved')
 
+    def test_initial_model_outage_still_computes_ready_confirmed_data(self):
+        room=prepared_room()
+        with patch.object(ai,'resolve_provider',return_value={'timeout':5}),patch.object(ai,'request',AsyncMock(side_effect=ai.AIError('上游不可用'))):
+            _,metadata=asyncio.run(agent.run({},room,'host','继续'))
+        self.assertTrue(metadata['_prepared_analysis']['proposals'])
+        self.assertEqual(metadata['agent']['tool_results'][0]['tool'],'analyze')
+        self.assertEqual(metadata['mode'],'preserved')
+
+    def test_current_unadopted_drafts_survive_a_followup_explanation(self):
+        room=prepared_room();domain.analyze(room)
+        pending=Resource(id='pending',kind='decision',name='尚待核对方向').model_dump()
+        room['agent']={'resources':[pending],'input_version':room['input_version'],'context_version':room['context_version'],'applied':False}
+        with patch.object(ai,'resolve_provider',return_value={'timeout':5}),patch.object(ai,'request',AsyncMock(return_value=json.dumps({'summary':'继续解释已有取舍'}))):
+            _,metadata=asyncio.run(agent.run({},room,'host','解释'))
+        self.assertEqual(metadata['agent']['resources'][0]['id'],'pending')
+
     def test_delayed_agent_does_not_replace_a_newly_computed_and_selected_formal_plan(self):
         from wedecide.models import AIInput
         async def run():
@@ -160,7 +176,7 @@ class DecisionReadingTests(unittest.TestCase):
         room=prepared_room();domain.analyze(room)
         room['resources'][0]['cost']=40;domain.invalidate(room,'核对费用')
         visible=domain.view(room,'host')
-        visible['agent']={'input_version':room['input_version'],'context_version':room['context_version'],'summary':'已有两个共同方向','tool_results':[{'tool':'simulate','hypothetical':True,'fairness':.8,'input_version':room['input_version'],'summary':'只读比较','candidates':[]}]} 
+        visible['agent']={'input_version':room['input_version'],'context_version':room['context_version'],'summary':'已有两个共同方向','tool_results':[{'tool':'simulate','hypothetical':True,'fairness':.8,'input_version':room['input_version'],'summary':'只读比较','candidates':[]}]}
         script="""
           import {comparisonPage} from './web/decision.js';
           let input='';for await(const chunk of process.stdin)input+=chunk;
@@ -171,5 +187,7 @@ class DecisionReadingTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn(visible['decision_progress']['summary'],result.stdout)
         self.assertIn('与第 1 版相比',result.stdout)
+        self.assertIn('人均费用上界',result.stdout)
+        self.assertEqual(next(item['fields']['cost_upper'] for item in visible['decision_progress']['change']['changed_options'] if 'cost_upper' in item['fields']),{'before':50.0,'after':40.0})
         self.assertIn('只读模拟',result.stdout)
         self.assertIn('正式规则',result.stdout)

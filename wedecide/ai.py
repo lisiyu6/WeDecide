@@ -11,7 +11,7 @@ from .context import calendar_context, visible_supplements
 from .interview_tools import dispatch_input_tools, input_tool_contract
 from .models import DateResolution, ComparisonExplanation, InterviewResult, Preference, Resource, Scenario, ScenarioDraft
 
-from .prompts import BASE_PROMPT, system_prompt
+from .prompts import system_prompt
 from .decision_tools import interview_algorithm_context
 
 

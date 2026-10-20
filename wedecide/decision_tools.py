@@ -65,7 +65,7 @@ def interview_algorithm_context(room,member,preference):
     contract={"objective":"先满足每位成员已确认的必要条件，再按(1-fairness)*平均预测满意度+fairness*最低预测满意度比较；正式共识只由投票决定。","fairness":room["rules"]["fairness"],"member_count":len(members),"supported_fields":fields,"known_fields":[key for key in fields if current.get(key,defaults[key])!=defaults[key]],"member_unresolved":current.get("unresolved",[]),"candidate_axes":axes,"candidate_categories":list(dict.fromkeys(r["category"] for r in resources)),"candidate_fact_gaps":gaps,"actual_effects":effects,"boundary":"只根据本人明确表达整理草稿。未表达的可选项无需补齐，不能由别人的偏好推断此人，也不能猜测价格或候选事实。"}
     gaps=[]
     if current.get("unresolved"):
-        gaps.append({"scope":"member","fields":["criteria"],"reason":"本人已表达的必要条件尚待澄清","priority":"clarify_constraint"})
+        gaps.append({"scope":"member","fields":[],"reason":"本人已表达的必要条件尚待澄清，结合原话选择对应算法字段","priority":"clarify_constraint"})
     for effect in effects:
         if effect['my_violations']:
             gaps.append({"scope":"member","fields":list(dict.fromkeys(v['field'] for v in effect['my_violations'] if v['field'] in fields)),"reason":"当前实际校核存在与本人条件的冲突；先理解底线，不默认放宽","priority":"confirmed_conflict"})
@@ -74,8 +74,8 @@ def interview_algorithm_context(room,member,preference):
         if len(known_values)>1 and not any(c['name'].casefold()==axis['name'].casefold() for c in current.get('criteria',[])):
             gaps.append({"scope":"member","fields":["criteria"],"axis":axis['name'],"reason":"已核对候选在此属性上有真实差异，本人态度可影响取舍","priority":"candidate_difference"})
     costs=[r['cost']+r['fixed_cost']/max(1,len(members)) for r in resources if r['confirmed'] and r['cost'] is not None]
-    if len(set(costs))>1:
-        gaps.append({"scope":"member","fields":["cost_preference","budget_target"],"reason":"已核对候选费用存在差异，可判断本人是否在意费用；具体金额由本人提供","evidence":{"lowest":min(costs),"highest":max(costs)},"priority":"candidate_difference"})
+    if len(set(costs))>1 and current.get("cost_preference","neutral")=="neutral" and current.get("budget_target") is None:
+        gaps.append({"scope":"member","fields":["cost_preference"],"reason":"已核对候选费用存在差异，可判断本人是否在意费用；具体金额由本人提供","evidence":{"lowest":min(costs),"highest":max(costs)},"priority":"candidate_difference"})
     if contract['candidate_fact_gaps']:
         gaps.append({"scope":"organizer","fields":[],"reason":"候选缺少已核对事实，应由房主补资料，不能让成员猜测","priority":"verify_facts"})
     contract['decision_gaps']=gaps[:12]
@@ -114,9 +114,15 @@ def decision_progress(room):
     if analysis_is_current(room) and previous:
         old=previous['proposals'];old_counts=_counts(old)
         old_feasible={_identity(p) for p in old if p['evaluation']['status']=='FEASIBLE'}
+        old_by_id={_identity(p):p for p in old};changed=[]
+        for proposal in current:
+            prior=old_by_id.get(_identity(proposal))
+            if not prior:continue
+            fields={key:{'before':prior['evaluation'].get(key),'after':proposal['evaluation'].get(key)} for key in ('status','cost_upper','score','minimum','start','end') if prior['evaluation'].get(key)!=proposal['evaluation'].get(key)}
+            if fields:changed.append({'title':proposal['title'],'fields':fields})
         now_feasible={_identity(p) for p in current if p['evaluation']['status']=='FEASIBLE'}
         now_failed={_identity(p) for p in current if p['evaluation']['status']=='INFEASIBLE'}
-        change={'previous_version':previous['version'],'current_version':version,'previous_feasible':old_counts['FEASIBLE'],'current_feasible':counts['FEASIBLE'],'became_feasible':len(now_feasible-old_feasible),'lost_feasible':len(old_feasible & now_failed)}
+        change={'previous_version':previous['version'],'current_version':version,'previous_feasible':old_counts['FEASIBLE'],'current_feasible':counts['FEASIBLE'],'became_feasible':len(now_feasible-old_feasible),'lost_feasible':len(old_feasible & now_failed),'changed_options':changed[:6],'changed_option_count':len(changed)}
     stage='collecting';summary=f'{confirmed} / {len(members)} 位成员已确认需求。';next_step='尚未确认的成员先核对自己的需求；其他人可以继续提议。';owner='members'
     if room['state']=='VOTING':
         stage='voting';summary='本轮正在对锁定的方案与成员名单正式表态。';next_step='成员提交本轮表态，等待投票结束。';owner='members'
@@ -139,6 +145,7 @@ def decision_progress(room):
     change_text=''
     if change:
         change_text=f'与第 {change["previous_version"]} 版相比，可行方案由 {change["previous_feasible"]} 个变为 {change["current_feasible"]} 个。'
+        if change['changed_option_count']:change_text+=f'其中 {change["changed_option_count"]} 个候选的费用、时间或群体评价发生变化，展开可核对。'
         if change['became_feasible'] or change['lost_feasible']:
             change_text+=f'按同一候选资源组合核对，新增可行 {change["became_feasible"]} 个，本版明确冲突 {change["lost_feasible"]} 个。'
     return {'stage':stage,'summary':summary,'next_step':next_step,'owner':owner,'counts':counts,'partial_count':partial,'confirmed':confirmed,'members':len(members),'input_version':room['input_version'],'analysis_version':version,'current':analysis_is_current(room),'change':change,'change_text':change_text,'scope':(room.get('analysis') or {}).get('scope','') if analysis_is_current(room) else ''}

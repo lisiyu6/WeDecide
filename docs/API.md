@@ -141,3 +141,17 @@ OpenAI 兼容供应商的 `endpoint` 可填根地址或以 `/v1` 结尾的基址
 共同整理使用内部队列键 (room_id, @shared-decision)，成员私密卡片/说明使用 (room_id, member_id)，仍共用同一房间供应商和全局容量限制。共同整理不占用房主的私密请求槽。ai_pending 仅表示本人请求，agent_pending 表示共同整理；未确认的私密卡片不触发群体正式计算。已有当前输入版本的真实评价会复用，不因再次说明取舍而清除 selected_id 或重建投票对象。
 
 interview 的卡片结果新增 targets（本次算法实际支持的 Preference 字段名，最多四项）及 purpose（普通语言的用途，最长240字）。非 ready 卡片必须两者有效；校验失败有一次有限修复机会，不能把无计算目标的闲聊直接当作问题。请求上下文 algorithm_contract 来自实际字段用途、本人已有条件、候选布尔属性差异、资料缺项与当前版本的本人实际匹配；通用备选不会主动追问不支持的活动排程字段。候选费用/事实缺失属于房主资料核对，不能由成员猜测补齐。
+
+## 算法进展与 Agent 工具
+
+房间快照提供程序生成的 `decision_progress`：stage（collecting / needs_options / ready_to_compute / needs_facts / conflict / comparing / voting / finished）、summary、next_step、owner、counts、input_version、analysis_version、current、scope，以及 change / change_text。change 包含上一版与当前可行数量及最多六个同一候选的明确字段变化。该结构不包含个人原话、条件金额或属性名称。
+
+`kind=agent` 的模型指令支持 `tool=analyze|simulate|respond`。simulate 参数为 `simulation:{fairness:0.8,plans:[]}`；fairness 可空，但必须提供权重或至少一份替代行程，最多三份且只引用当前活动资源。工具在隔离副本运行，结果标记 hypothetical，不写入正式规则或条件。`agent.tool_results` 保存有限的聚合执行凭据；无法执行时明确返回工具错误，不假装计算成功。已有真实校核在上游解释失败时仍保留。
+
+`kind=interview` 的 `tool_calls` 可包含 `{tool:"request_input",choice:"left",field:"budget_max",label:"人均上限"}`。field 必须属于本题 targets，同一分支最多一次。后端派生 input_cards，前端选择该分支后填写，实际提交才发送回答。
+
+## 管理员预设配置
+
+管理员设置返回 `prompt_preset_version`、`prompt_rules` 和 `prompt_catalog`。每项包含 key、title、description、preset、effective、customized；仅管理员设置接口返回这些内容。阶段为 context、agent、interview、explain、scenario、preferences、negotiate、chat、date。
+
+PUT 设置的 prompts 支持局部更新，未提供的阶段保留；空字符串表示恢复继承内置预设。字段最多12000字，无效阶段拒绝，仍检查配置 revision。无须更换供应商或重建房间；后续请求读取有效配置，正在处理的任务使用原配置。

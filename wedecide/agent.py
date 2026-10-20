@@ -38,25 +38,40 @@ def current_analysis(room):
     return analysis_is_current(room)
 
 
-def preserve_progress(room,prepared,tool_results=None):
-    existing=current_analysis(room)
-    if prepared is None and not existing and room["resources"] and all(m["confirmed"] for m in engine.active_members(room)) and room["state"] not in domain.TERMINAL|{"VOTING"}:
-        prepared=engine.generate(room)
-    notice="本轮 AI 说明暂未完成，已保留已有数据"+("和实际计算结果" if prepared is not None or existing else "")+"，没有猜测新的事实或条件。"
-    if prepared is not None or existing:
-        proposals=prepared["proposals"] if prepared is not None else room["proposals"];feasible=sum(p["evaluation"]["status"]=="FEASIBLE" for p in proposals)
-        summary=f"已按当前确认的数据完成校核，形成 {len(proposals)} 个候选，其中 {feasible} 个通过可计算的必要条件检查。"
-        next_step="展开比较具体方案及缺项，再由房主选择待投票方案。" if feasible else "先核对缺失资料或调整备选，不需要反复回答已有问题。"
-        previous={}
+def current_memory(room):
+    previous=room.get('agent') or {}
+    if previous.get('stale') or previous.get('error') or previous.get('input_version')!=room['input_version'] or previous.get('context_version',0)!=room.get('context_version',0) or previous.get('round',room['round'])!=room['round']:
+        return {}
+    return previous
+
+
+def preserve_progress(room, prepared, tool_results=None):
+    """Keep real evaluation and valid drafts when a model cannot finish."""
+    memory = current_memory(room)
+    existing = current_analysis(room)
+    if prepared is None and not existing and algorithm_status(room)['can_analyze']:
+        prepared = engine.generate(room)
+    calculated = prepared is not None or existing
+    if calculated:
+        proposals = prepared['proposals'] if prepared is not None else room['proposals']
+        feasible = sum(p['evaluation']['status'] == 'FEASIBLE' for p in proposals)
+        summary = f'已按当前确认的数据完成校核，形成 {len(proposals)} 个候选，其中 {feasible} 个通过可计算的必要条件检查。'
+        next_step = '展开比较具体方案及缺项，再由房主选择待投票方案。' if feasible else '先核对缺失资料或调整备选，不需要反复回答已有问题。'
     else:
-        previous=room.get("agent") or {}
-        if previous.get("stale") or previous.get("error") or previous.get("input_version")!=room["input_version"] or previous.get("context_version",0)!=room.get("context_version",0):
-            previous={}
-        summary="已保留当前提议、已有候选和已确认需求；本轮未新增未经核对的决策条件。"
-        next_step="可继续在左侧补充候选想法；个人需求以已有整理结果为基础核对，不必从头问答。"
-    turn={"tool":"respond","goal":previous.get("goal") or room["scenario"]["title"],"summary":summary,"next_step":next_step,"questions":[],"resources":previous.get("resources",[]) if not previous.get("applied") else [],"resource_updates":previous.get("resource_updates",[]) if not previous.get("applied") else [],"plans":previous.get("plans",[]) if not previous.get("applied") else [],"notice":notice}
-    turn["tool_results"]=tool_results or []
-    return summary,{"agent":turn,"_prepared_analysis":prepared,"mode":"preserved"}
+        summary = '已保留当前提议、已有候选和已确认需求；本轮未新增未经核对的决策条件。'
+        next_step = '可继续在左侧补充候选想法；个人需求以已有整理结果为基础核对，不必从头问答。'
+    receipts = tool_results or memory.get('tool_results', [])
+    if prepared is not None and not any(item.get('tool') == 'analyze' for item in receipts):
+        receipts = [{'tool': 'analyze', 'hypothetical': False, 'input_version': room['input_version'], 'analysis_version': room['analysis_version'] + 1, 'summary': summary}]
+    turn = {
+        'tool': 'respond', 'goal': memory.get('goal') or room['scenario']['title'],
+        'summary': summary, 'next_step': next_step, 'questions': [],
+        'notice': '本轮 AI 说明暂未完成，已保留已有数据' + ('和实际计算结果' if calculated else '') + '，没有猜测新的事实或条件。',
+        'tool_results': receipts,
+    }
+    for key in ('resources', 'resource_updates', 'plans'):
+        turn[key] = memory.get(key, []) if not memory.get('applied') else []
+    return summary, {'agent': turn, '_prepared_analysis': prepared, 'mode': 'preserved'}
 
 
 def public_context(room, user_id):
@@ -66,8 +81,9 @@ def public_context(room, user_id):
     visible['members'] = [m for m in visible['members'] if m['status'] == 'approved']
     previous = room.get('agent') or {}
     visible['agent_memory'] = {key: previous[key] for key in ('goal', 'summary', 'next_step', 'questions') if previous.get(key)}
-    if not previous.get('applied') and not previous.get('error') and not previous.get('stale') and previous.get('input_version')==room['input_version'] and previous.get('context_version',0)==room.get('context_version',0):
+    if current_memory(room) and not previous.get('applied'):
         visible['pending_drafts'] = {key: previous[key] for key in ('resources', 'resource_updates', 'plans') if previous.get(key)}
+    visible['previous_tool_results']=current_memory(room).get('tool_results',[])
     for key in ('me', 'requests', 'share_token', 'provider_id', 'feedback', 'agent'):
         visible.pop(key, None)
     def strip(value):
@@ -118,7 +134,7 @@ async def run(config, room, user_id, instruction):
         try:
             raw = await asyncio.wait_for(ai.request(provider, system, messages), timeout=provider['timeout']+5)
         except (ai.AIError,TimeoutError):
-            if prepared is not None or current_analysis(evaluated) or tool_results:
+            if prepared is not None or current_analysis(evaluated) or tool_results or algorithm_status(room)["can_analyze"]:
                 return preserve_progress(room,prepared,tool_results)
             raise
         try:
@@ -152,7 +168,10 @@ async def run(config, room, user_id, instruction):
             messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})},{'role':'user','content':'工具已调用或当前前提不满足；请使用已有真实结果说明下一步，tool=respond。'}])
             continue
         turn['tool'] = 'respond'
-        turn['tool_results']=tool_results
+        memory=current_memory(room)
+        turn['tool_results']=tool_results or memory.get('tool_results',[])
+        if not memory.get('applied') and not any(turn[key] for key in ('resources','resource_updates','plans')):
+            for key in ('resources','resource_updates','plans'):turn[key]=memory.get(key,[])
         existing = {r['id'] for r in room['resources']}
         known=set(existing);ambiguous=set();resources=[];updates=[];updated=set()
         for resource in turn['resources']:
