@@ -6,13 +6,14 @@ import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
 import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep,latestInterview,interviewDraft} from './preferences.js';
 
-const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,contextOpen:false,contextTab:'supplements',contextDraft:null,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
+const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,contextOpen:false,contextTab:'supplements',contextDraft:null,knowledgeDraft:null,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
 let stream=null,deletingRoom=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
 const roomPath=suffix=>`/api/rooms/${encodeURIComponent(state.room.id)}${suffix}`;
 const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
 const chatKey=()=>`wd-chat:${state.room.id}:${state.room.me.id}:${state.chatMode}`;
 function leaveDeletedRoom(room,message='房主已删除这个空间，已返回首页') {
  deleteDraft(`wd-pref:${room.id}:${room.me.id}`);
+ deleteDraft(`wd-context:${room.id}:${room.me.id}`);deleteDraft(`wd-knowledge:${room.id}:${room.me.id}`);
  for(const mode of ['private','shared'])deleteDraft(`wd-chat:${room.id}:${room.me.id}:${mode}`);
  if(state.room?.id!==room.id)return;
  stream?.close();stream=null;
@@ -39,7 +40,7 @@ function accountNext(value='/'){try{const url=new URL(value,location.origin);ret
 function showAccount(next,mode=null){state.route='auth';state.room=null;state.authNext=accountNext(next);state.authMode=mode||(state.bootstrap.has_legacy_rooms?'register':'login');render();}
 function render(preserve=false) {
  const root=$('#app');
- const saved=preserve?captureInputs(root):null;
+ const saved=preserve?captureInputs(root):null,contextScroll=preserve?$('#context-drawer .context-drawer-body',root)?.scrollTop:0;
  const expanded=preserve?$$('details[data-proposal-detail][open]',root).map(el=>el.dataset.proposalDetail):[];
  if(saved)saved.values=saved.values.filter(v=>state.dirtyForms.has(v.form)&&!(v.form==='preference-form'&&(terminal.has(state.room?.state)||state.room?.state==='VOTING')));
  if(state.route==='home')root.innerHTML=home(state.rooms,state.bootstrap);
@@ -49,6 +50,7 @@ function render(preserve=false) {
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state)+contextDrawer(state):waiting(state.room);
  mountContextDrawer(root);
  if(saved)restoreInputs(root,saved);
+ const contextBody=$('#context-drawer .context-drawer-body',root);if(contextBody&&contextScroll)contextBody.scrollTop=contextScroll;
  for(const id of expanded){const detail=$$('details[data-proposal-detail]',root).find(el=>el.dataset.proposalDetail===id);if(detail)detail.open=true;}
  const roomView=state.route==='room'&&state.room?.me.status==='approved'?$('#room-view',root):null;
  if(roomView&&state.tab==='settings')renderProviderModels(roomView);
@@ -83,6 +85,8 @@ async function refresh(preserve=true) {
      const previous=state.messages.filter(m=>recent.length&&m.id<recent[0].id);
      state.messages=[...previous,...recent].slice(-300);
    }
+   const interview=latestInterview(state);
+   if(interview&&interview.id!==state.interviewSeenId){state.interviewSeenId=interview.id;if(state.tab==='preferences'&&interview.metadata.interview.ready)state.prefStep=1;}
    if(!preserve||oldSnapshot!==JSON.stringify([state.room,state.provider,state.messages]))render(preserve&&(state.tab!=='vote'||sameVote));
  }catch(error){
    if(version===routeVersion&&error.status===404){if(deletingRoom!==key)leaveDeletedRoom(state.room);}
@@ -129,7 +133,8 @@ async function route() {
      if(version!==routeVersion)return;
      state.code=code;state.tab=tab;state.room=room;state.route='room';state.messages=messages;state.provider=provider;state.hasOlder=messages.length===50;
      if(previousRoom!==room.id){state.prefAiOpen=false;state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());state.prefStep=state.prefDraft?.step??0;}
-     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';state.contextDraft=loadDraft(`wd-context:${room.id}:${room.me.id}`)||{};
+     state.interviewSeenId=latestInterview(state)?.id||0;if(tab==='preferences')state.prefStep=url.searchParams.get('stage')==='result'?1:0;
+     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';state.contextDraft=loadDraft(`wd-context:${room.id}:${room.me.id}`)||{};state.knowledgeDraft=loadDraft(`wd-knowledge:${room.id}:${room.me.id}`);
      render();connect();return;
    }
    const rooms=await api('/api/rooms');if(version!==routeVersion)return;
@@ -163,11 +168,12 @@ async function saveRoomContext(action,payload){
  state.room={...room,ai_pending:state.room.ai_pending};
  state.dirtyForms.delete(action==='knowledge'?'knowledge-form':'supplement-form');
  if(action==='supplement'){state.contextDraft={};deleteDraft(`wd-context:${key}:${room.me.id}`);}
+ else{state.knowledgeDraft=null;deleteDraft(`wd-knowledge:${key}:${room.me.id}`);}
  render(true);await refresh(true);
 }
 async function resolveFormDate(form){
  const version=routeVersion,room=formId(form)==='room-settings'?state.room:null;
- const answer=await resolveDate(form,room);
+ const answer=await resolveDate(form,room,()=>version===routeVersion);
  if(version!==routeVersion)return;
  state.dirtyForms.add(formId(form));
  if(formId(form)==='create-room'){state.creationDraft={...state.creationDraft,date_expression:form.elements.date_expression.value,scenario:readScenario(formData(form))};saveDraft('wd-create',state.creationDraft);}
@@ -188,7 +194,8 @@ const handlers={
  'context-open':()=>{state.contextOpen=true;render(true);},
  'context-close':()=>{state.contextOpen=false;render(true);$('[data-action="context-open"]')?.focus();},
  'context-tab':el=>{state.contextTab=el.dataset.tab;render(true);},
- 'context-to-preferences':()=>navigate(`/r/${state.room.code}?view=preferences`),
+ 'knowledge-discard':async()=>{state.knowledgeDraft=null;deleteDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`);state.dirtyForms.delete('knowledge-form');await refresh(true);render(true);},
+ 'context-to-preferences':()=>navigate(`/r/${state.room.code}?view=preferences&stage=result`),
  'resolve-date':el=>resolveFormDate(el.closest('form')),
  'menu':()=>{state.menu=!state.menu;$('.sidebar')?.classList.toggle('open',state.menu);const backdrop=$('.sidebar-backdrop');if(backdrop)backdrop.hidden=!state.menu;$('.mobile-menu')?.setAttribute('aria-expanded',String(state.menu));},
  'account-logout':async()=>{await post('/api/auth/logout');stream?.close();state.bootstrap=null;state.room=null;state.messages=[];state.prefDraft=null;state.creationDraft={};deleteDraft('wd-create');navigate('/');},
@@ -201,6 +208,8 @@ const handlers={
  'plan-remove':el=>confirmAction('移除自定义行程','相关方案将按最新信息重新评价。',()=>mutate('plans',{plans:state.room.manual_plans.filter(p=>p.id!==el.dataset.id)})),
 
  'interview-answer':el=>{const turn=latestInterview(state)?.metadata.interview;if(!turn)throw new Error('问题已变化，请刷新后继续');const answer=el.dataset.choice==='skip'?'这项暂未确定，请不要替我设置条件':turn[el.dataset.choice];return askInterview(`针对问题「${turn.question}」，我的回答是：${answer}`);},
+ 'interview-next':()=>askInterview('请继续用卡片了解我的想法，自主生成最有价值的下一问和两个不同选项；我还想继续表达，ready=false。'),
+ 'interview-focus':()=>$('#interview-form textarea')?.focus(),
  'interview-summary':()=>askInterview('请先把已有回答整合成需求表，保留未知项，停止继续追问。'),
  'explain-comparison':async()=>{await post(roomPath('/ai'),{kind:'explain',text:'请详细比较当前有效方案，解释与我需求的匹配、复杂取舍、未量化要求和资料缺项，并给出下一步。'});state.room.ai_pending=true;render(true);},
  'invite':()=>{const base=state.bootstrap.public_url||location.origin;const url=`${base}/r/${state.room.code}`;dialog('让伙伴一起加入',`<p class="muted">分享这个链接或房间码。申请加入后，需要房主批准。</p><div class="room-code">${esc(state.room.code)}</div><input class="copy-input" readonly value="${esc(url)}"><img class="qr" src="${roomPath('/invite.svg')}" alt="房间邀请二维码"><div class="actions"><button class="button" data-action="copy-invite">${icon('link',15)} 复制邀请链接</button></div>`);},
@@ -218,7 +227,7 @@ const handlers={
  'edit-request':el=>{const q=state.room.requests.find(q=>q.id===el.dataset.id);state.editRequest=q;dialog('调整后，由你确认',`<p class="hint">字段：${esc(q.field)}。时间输入一天内分钟数，类别或地点列表输入 JSON 数组，预算与时长填数值。</p><form id="edit-request-form" class="stack" style="margin-top:18px">${field('你愿意接受的新值','value',JSON.stringify(q.after),'text','required')}<button type="submit" class="button">按这个值确认修改</button></form>`);},
  'chat-mode':el=>{state.chatMode=el.dataset.mode;state.chatRaw=loadDraft(chatKey())||'';state.dirtyForms.delete('chat-form');render(true);},
  'older-messages':async()=>{if(!state.messages.length)return;const rows=await api(roomPath(`/messages?before=${state.messages[0].id}`));state.messages=[...rows,...state.messages].slice(-300);state.hasOlder=rows.length===50&&state.messages.length<300;render(true);},
- 'apply-draft':el=>{const row=state.messages.find(m=>m.id===Number(el.dataset.id));if(!row?.metadata.draft)return;if(row.metadata.preference_version!==state.room.me.preference_version)throw new Error('这份 AI 草稿基于旧版个人条件，请重新提取或手动调整');state.prefStep=1;state.prefDraft={preference:row.metadata.draft,preference_version:row.metadata.preference_version,step:1};saveDraft(draftKey(),state.prefDraft);state.dirtyForms.delete('preference-form');if(state.tab==='preferences')render(false);else navigate(`/r/${state.room.code}?view=preferences`);toast('草稿已填入，请逐项核对再确认');},
+ 'apply-draft':el=>{const row=state.messages.find(m=>m.id===Number(el.dataset.id));if(!row?.metadata.draft)return;if(row.metadata.preference_version!==state.room.me.preference_version)throw new Error('这份 AI 草稿基于旧版个人条件，请重新提取或手动调整');state.prefStep=1;state.prefDraft={source_message_id:row.id,preference:row.metadata.draft,preference_version:row.metadata.preference_version,step:1};saveDraft(draftKey(),state.prefDraft);state.dirtyForms.delete('preference-form');if(state.tab==='preferences')render(false);else navigate(`/r/${state.room.code}?view=preferences`);toast('草稿已填入，请逐项核对再确认');},
  'discard-pref':()=>{state.prefDraft=null;deleteDraft(draftKey());state.dirtyForms.delete('preference-form');render(false);},
  'add-resource':()=>resourceDialog(),
  'edit-resource':el=>resourceDialog(state.room.resources.find(r=>r.id===el.dataset.id)),
@@ -302,7 +311,7 @@ async function submit(form) {
    await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('备选方案已保存，Agent 将按新信息继续');break;
   }
   case 'knowledge-form':await saveRoomContext('knowledge',{text:d.text,knowledge_version:Number(d.knowledge_version)});toast('前置知识已更新，房间 Agent 会统一参考');break;
-  case 'supplement-form':await saveRoomContext('supplement',{title:d.title,text:d.text,visibility:d.visibility});toast('已交给房间 Agent'+(d.visibility==='shared'?'，将用于共同决策':'私密整理，请在我的需求核对结果'));break;
+  case 'supplement-form':await saveRoomContext('supplement',{title:d.title,text:d.text,visibility:d.visibility});toast(state.room.state==='VOTING'?'补充已记录，本轮投票不受影响':'补充已保存，房间 Agent 将'+(d.visibility==='shared'?'用于共同决策':'整理为待确认的需求草稿'));break;
   case 'room-settings':if(d.date_expression?.trim()&&form.elements.date.dataset.expression!==d.date_expression.trim()){const resolved=await resolveFormDate(form);if(!resolved)return;d.date=resolved.date;}await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
   case 'room-provider':{
    await api(roomPath('/provider'),{method:'PUT',body:{revision:state.formRevisions[formId(form)]??state.room.revision,provider_id:d.provider_id,provider:d.mode==='custom'?readProvider(form):null}});
@@ -334,13 +343,14 @@ document.addEventListener('input',event=>{
  state.dirtyForms.add(formId(form));
  if(state.room)state.formRevisions[formId(form)]??=state.room.revision;
  if(formId(form)==='preference-form'){
-   state.prefDraft={preference:readPreference(form),preference_version:state.prefDraft?.preference_version??state.room.me.preference_version,step:state.prefStep||0};saveDraft(draftKey(),state.prefDraft);
+   state.prefDraft={source_message_id:state.prefDraft?.source_message_id??latestInterview(state)?.id??0,preference:readPreference(form),preference_version:state.prefDraft?.preference_version??state.room.me.preference_version,step:state.prefStep||0};saveDraft(draftKey(),state.prefDraft);
    const badge=$('[data-pref-badge]');if(badge){badge.textContent='草稿 · 待你确认';badge.classList.remove('good');}
  }else if(formId(form)==='interview-form'){state.interviewRaw=form.elements.text.value;saveDraft(`wd-interview:${state.room.id}:${state.room.me.id}`,state.interviewRaw);}
  else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
  else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
  else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;setText('#fairness-label',`${event.target.value}%`,form);}
  else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,date_expression:d.date_expression||'',scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
+ else if(formId(form)==='knowledge-form'){state.knowledgeDraft={text:form.elements.text.value,knowledge_version:Number(form.elements.knowledge_version.value)};saveDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`,state.knowledgeDraft);}
  else if(formId(form)==='supplement-form'){state.contextDraft=formData(form);saveDraft(`wd-context:${state.room.id}:${state.room.me.id}`,state.contextDraft);}
  else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;saveDraft('wd-create',state.creationDraft);}
 });

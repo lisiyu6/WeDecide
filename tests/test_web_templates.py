@@ -45,6 +45,20 @@ class PreferenceTemplateTests(unittest.TestCase):
         self.assertEqual(len(self.elements.matching('data-pref-confirm')), 1)
         self.assertEqual(len(self.elements.matching('data-pref-validation')), 1)
 
+    def test_swipe_card_stays_present_after_summary_and_confirmation(self):
+        script="""
+          import {preferenceEditor} from './web/preferences.js';
+          const room={id:'r',state:'COLLECTING',resources:[],me:{preference:{},preference_version:1,confirmed:true}};
+          const messages=[{id:2,role:'assistant',kind:'interview',metadata:{preference_version:1,draft:{},interview:{ready:true,summary:'已整理你的想法'}}}];
+          console.log(JSON.stringify([preferenceEditor({room,messages:[],prefStep:0}),preferenceEditor({room,messages,prefStep:0})]));
+        """
+        output=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
+        for html in json.loads(output.stdout):
+            elements=Elements(html)
+            self.assertEqual(len(elements.matching('data-interview-card')),1)
+            self.assertNotIn('hidden',elements.matching('data-interview-panel')[0])
+            self.assertEqual(len(elements.matching('data-choice')),2)
+
     def test_notes_placeholder_cannot_consume_following_markup(self):
         notes = [attrs for tag, attrs in self.elements.nodes if tag == 'textarea' and attrs.get('name') == 'notes']
         self.assertEqual(len(notes), 1)

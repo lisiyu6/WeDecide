@@ -35,7 +35,9 @@
 | `preference` | `preference_version`, `preference` | 本人；未澄清项须解决；投票或结束后锁定 |
 | `resources` | `resources` 列表 | 房主；最多 20 项 |
 | `plans` | `plans` 列表 | 房主；最多六份自定义活动行程，每份最多五项，引用当前活动资源 |
-| `agent_draft` | 空 | 房主；仅采纳当前有效且未采纳的 Agent 草稿，新事实仍待核对 |
+| `agent_draft` | 空 | 房主；校验 input_version 与 context_version，采纳新增/修正候选草稿，新事实仍待核对 |
+| `knowledge` | `text`, `knowledge_version` | 房主；可空，最多 12000 字，知识独立版本防止覆盖 |
+| `supplement` | `title?`, `text`, `visibility?` | 获准成员；private 默认，或 shared；最多 2000 字，独立提交不因他人并发被拒绝 |
 | `agent_toggle` | `enabled` 布尔值 | 房主；停止/恢复后续自动推进，已开始的请求可完成 |
 | `settings` | `scenario`, `rules` | 房主；正式投票开始后冻结规则 |
 | `analyze` | 空 | 房主；全员已确认且有候选资源 |
@@ -79,6 +81,17 @@ AI 请求按 kind 使用同一套供应商选择、并发和消息隔离机制�
 Preference.criteria 支持最多十二项动态要求：`{name, rating:0|50|100, weight:1..5, hard:boolean, scope:any|all}`，rating=50 的中立态度不可设为必要条件。Resource.attributes 是同名事实布尔值，缺失表示未知。Resource.kind 为 activity（活动）或 decision（通用备选）；通用备选允许不填城市和日期，evaluation.start/end 为 null。具体模型见 models.py。
 
 供应商优先使用房间专用配置，其次房间选择的全局供应商，再其次管理员默认值。密钥仅后端使用，新增 Agent 不改变原接口或另设密钥。
+
+房间 `knowledge` 为可选前置知识，`supplements` 只返回本人或共享条目，JSON 报告只包含共享补充。房间最多保留一百张补充卡。私密补充提交后会排入同一房间 Agent 的 interview 整理流程，结果仍需本人确认；有请求在进行时，维护循环在空闲后继续，失败不反复自动重试。知识或共享资料变化增加 context_version；投票期间不推进 Agent、不修改锁定快照。
+
+Agent 的内部 planning_context 包含去标识、相同条件合并计数的 algorithm_inputs，排除原话、notes、discovery；该字段不返回成员接口。模型可在 resource_updates 提出已存在候选的完整事实修正草稿，资源 id 必须已存在。采纳后 confirmed/verified 重置为 false，再由房主核对。
+
+| 方法 | 路径 | 日期换算 |
+| --- | --- | --- |
+| POST | `/api/date/resolve` | `{text}`，创建前使用管理员默认接口 |
+| POST | `/api/rooms/{id}/date` | `{text}`，房主使用本房间接口；投票或结束时不可更改日期 |
+
+返回 `{date, explanation, needs_clarification, question, reference_date, timezone, original}`。换算基准由服务器当前时间提供；有歧义时 date 为空并给出问题。接口不直接保存场景，时区通过 WEDECIDE_TIMEZONE 配置，默认 Asia/Shanghai。
 
 ## 管理员
 
