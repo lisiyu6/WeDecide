@@ -221,19 +221,29 @@ def mutate(room, user_id, action, payload, revision, limits):
         report = room.get("agent")
         require(report and report["input_version"] == room["input_version"] and report.get("context_version",0)==room.get("context_version",0) and report.get("round",room["round"])==room["round"], "共同备选草稿已过期，请让 Agent 继续后再采纳", 409)
         require(not report.get("running") and not report.get("error") and not report.get("stale"), "Agent 仍在处理或结果不可用，请继续后重试")
+        require('report_updated' not in payload or payload['report_updated']==report.get('updated'),'共同草稿已更新，请重新打开核对窗口',409)
         require(not report.get("applied"), "这份 Agent 草稿已采纳", 409)
         additions = [Resource(**resource).model_dump() for resource in report.get("resources", [])]
         updates = [Resource(**resource).model_dump() for resource in report.get("resource_updates", [])]
+        # Only explicit organizer review can turn a model draft into confirmed facts.
+        reviewed=payload.get('reviewed_resources',[])
+        require(isinstance(reviewed,list), '核对结果需要条目列表')
+        reviewed=[Resource(**value).model_dump() for value in reviewed]
+        proposed={resource['id'] for resource in [*additions,*updates]}
+        require(len({value['id'] for value in reviewed})==len(reviewed) and all(value['id'] in proposed for value in reviewed),'核对条目与当前草稿不一致，请重新打开',409)
+        reviewed_by_id={value['id']:value for value in reviewed}
+        additions=[reviewed_by_id.get(value['id'],value) for value in additions]
+        updates=[reviewed_by_id.get(value['id'],value) for value in updates]
         plans = [ManualPlan(**plan).model_dump() for plan in report.get("plans", [])]
         require(len(room["resources"])+len(additions)<=20, "候选条目总数最多 20 个，请先整理已有候选")
         known = {resource["id"] for resource in room["resources"]}
         require(len({resource["id"] for resource in updates})==len(updates),"修正候选 ID 重复")
         require(all(resource["id"] in known for resource in updates),"修正的候选已不存在，请让 Agent 重新整理",409)
         for resource in updates:
-            resource["confirmed"] = resource["verified"] = False
+            if resource['id'] not in reviewed_by_id:resource["confirmed"] = resource["verified"] = False
         for resource in additions:
             require(resource["id"] not in known, "Agent 建议的候选标识重复，请重新生成")
-            resource["confirmed"] = resource["verified"] = False
+            if resource['id'] not in reviewed_by_id:resource["confirmed"] = resource["verified"] = False
             known.add(resource["id"])
         require(all(step["resource_id"] in known for plan in plans for step in plan["steps"]), "Agent 行程引用了未知候选，请重新生成")
         require(len(room.get("manual_plans", []))+len(plans)<=6, "自定义行程最多 6 个")

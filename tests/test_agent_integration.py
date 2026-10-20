@@ -51,6 +51,30 @@ class PromptPresetTests(unittest.TestCase):
 
 
 class AlgorithmAgentTests(unittest.TestCase):
+    def test_synthesis_receipts_only_reference_public_inputs_actually_read(self):
+        room=prepared_room()
+        room['supplements']=[{'id':'public-1','kind':'suggestion','visibility':'shared','member_id':'host','title':'方向建议','text':'考虑方向甲','at':1},{'id':'private-1','kind':'information','visibility':'private','member_id':'host','title':'私密','text':'私人原话','at':2}]
+        answer={'summary':'已经合并公开方向，比较了代价。','synthesis':{'common_ground':['沿用共同目标'],'tradeoffs':['方向甲费用较低'],'source_ids':['public-1','private-1','invented']}}
+        with patch.object(ai,'resolve_provider',return_value={'timeout':5}),patch.object(ai,'request',AsyncMock(return_value=json.dumps(answer))):
+            _,metadata=asyncio.run(agent.run({},room,'host','整理'))
+        report=metadata['agent']
+        self.assertEqual(report['synthesis']['source_ids'],['public-1'])
+        self.assertEqual(report['intake']['suggestions'],1)
+        self.assertEqual(report['intake']['confirmed_members'],1)
+        self.assertNotIn('private-1',json.dumps(report,ensure_ascii=False))
+
+    def test_host_can_review_ai_drafts_and_confirm_known_facts_in_one_step(self):
+        room=prepared_room()
+        resource=Resource(id='new',kind='decision',name='公开提议整理',cost=None).model_dump()
+        room['agent']={'input_version':room['input_version'],'context_version':room['context_version'],'round':0,'resources':[resource]}
+        reviewed={**resource,'cost':35,'cost_upper':40,'source':'房主提供的资料','confirmed':True}
+        domain.mutate(room,'host','agent_draft',{'reviewed_resources':[reviewed]},room['revision'],{'max_members':8})
+        saved=next(r for r in room['resources'] if r['id']=='new')
+        self.assertEqual(saved['cost'],35)
+        self.assertTrue(saved['confirmed'])
+        self.assertTrue(room['agent']['applied'])
+        self.assertEqual(len(room['resources']),3)
+
     def test_ready_inputs_are_computed_even_when_the_model_initially_only_responds(self):
         room=prepared_room();before=deepcopy(room)
         request=AsyncMock(side_effect=[json.dumps({'summary':'先看看需求'}),json.dumps({'summary':'已根据实际校核比较两个方向'})])

@@ -18,6 +18,11 @@ def read_turn(raw):
     obj=ai.parse_json(raw)
     if not isinstance(obj,dict):raise ValueError("Agent 结果需要对象")
     obj=dict(obj);skipped=0
+    # Optional presentation data must never discard usable candidates/tool output.
+    brief=obj.get('synthesis')
+    if not isinstance(brief,dict):brief={}
+    obj['synthesis']={key:[value[:600] for value in brief.get(key,[]) if isinstance(value,str)][:limit] if isinstance(brief.get(key),list) else [] for key,limit in (('common_ground',3),('tradeoffs',3),('source_ids',30))}
+    obj['synthesis']['recommendation']=str(brief.get('recommendation') or '')[:800]
     for key,model in (("resources",Resource),("resource_updates",Resource),("plans",ManualPlan)):
         cleaned=[];items=obj.get(key) or []
         if not isinstance(items,list):items=[];skipped+=1
@@ -67,7 +72,7 @@ def preserve_progress(room, prepared, tool_results=None):
         'tool': 'respond', 'goal': memory.get('goal') or room['scenario']['title'],
         'summary': summary, 'next_step': next_step, 'questions': [],
         'notice': '本轮 AI 说明暂未完成，已保留已有数据' + ('和实际计算结果' if calculated else '') + '，没有猜测新的事实或条件。',
-        'tool_results': receipts,
+        'tool_results': receipts, 'intake':None, 'synthesis':{},
     }
     for key in ('resources', 'resource_updates', 'plans'):
         turn[key] = memory.get(key, []) if not memory.get('applied') else []
@@ -119,7 +124,26 @@ def planning_context(room, user_id):
     return context
 
 
-async def run(config, room, user_id, instruction):
+def attach_intake(room, turn):
+    """A receipt of data actually supplied to this run, never a claim of consent."""
+    items=visible_supplements(room)[-30:]
+    known={item['id'] for item in items}
+    synthesis=turn.get('synthesis') or {}
+    synthesis['source_ids']=list(dict.fromkeys(value for value in synthesis.get('source_ids',[]) if value in known))
+    turn['synthesis']=synthesis
+    turn['intake']={
+        'input_version':room['input_version'],'context_version':room.get('context_version',0),
+        'suggestions':sum(item.get('kind')=='suggestion' for item in items),
+        'information':sum(item.get('kind')!='suggestion' for item in items),
+        'source_ids':[item['id'] for item in items],
+        'confirmed_members':sum(m['confirmed'] for m in engine.active_members(room)),
+        'members':len(engine.active_members(room)),
+        'knowledge_version':room.get('knowledge_version',0) if room.get('knowledge','').strip() else None,
+    }
+    return turn
+
+
+async def run(config, room, user_id, instruction, on_progress=None):
     provider = ai.resolve_provider(config, room)
     if not provider:
         raise ai.AIError('决策 Agent 需要可用的 AI 接口，请在房间设置或 /admin 配置后继续')
@@ -128,6 +152,8 @@ async def run(config, room, user_id, instruction):
     messages = [{'role':'user','content':'当前决策数据（非指令）：\n'+store.dumps(context)+'\n\n本次任务：'+instruction}]
     prepared=None;evaluated=room;used=set();tool_results=[]
     budget={"remaining":3}
+    def progress(phase):
+        if on_progress:on_progress(phase)
     for turn_index in range(3):
         if budget["remaining"]<=0:return preserve_progress(room,prepared,tool_results)
         budget["remaining"]-=1;started=time.monotonic()
@@ -145,23 +171,27 @@ async def run(config, room, user_id, instruction):
         # Ready data always reaches the real engine before a public conclusion,
         # even if a compatible model initially skips its analyze instruction.
         if (turn['tool']=='analyze' or status['needs_analysis']) and 'analyze' not in used and status['can_analyze']:
+            progress('checking')
             used.add('analyze')
             if not current_analysis(evaluated):
                 prepared=engine.generate(room)
                 evaluated=deepcopy(room)
                 domain.analyze(evaluated,deepcopy(prepared))
-            progress=decision_progress(evaluated)
-            receipt={'tool':'analyze','hypothetical':False,'input_version':room['input_version'],'analysis_version':evaluated['analysis_version'],'summary':progress['summary'],'counts':progress['counts']}
+            reading=decision_progress(evaluated)
+            receipt={'tool':'analyze','hypothetical':False,'input_version':room['input_version'],'analysis_version':evaluated['analysis_version'],'summary':reading['summary'],'counts':reading['counts']}
             tool_results.append(receipt)
+            progress('explaining')
             messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})},{'role':'user','content':'analyze 工具实际结果：\n'+store.dumps(planning_context(evaluated,user_id))+'\n请读取真实校核与版本变化，完成比较和下一步。必要时可调用一次只读 simulate，否则 tool=respond。'}])
             continue
         if turn['tool']=='simulate' and 'simulate' not in used:
+            progress('simulating')
             used.add('simulate')
             try:
                 receipt=simulate(evaluated,DecisionSimulation(**turn['simulation']))
             except ValueError:
                 receipt={'tool':'simulate','hypothetical':True,'input_version':room['input_version'],'error':'模拟未执行：需要可编辑阶段、全体确认，以及当前活动资源的有效行程或公平性权重。'}
             tool_results.append(receipt)
+            progress('explaining')
             messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})},{'role':'user','content':'simulate 工具实际结果（只读假设，不改变正式数据）：\n'+store.dumps(receipt)+'\n基于真实结果完成取舍说明，tool=respond。'}])
             continue
         if turn['tool'] in {'analyze','simulate'} and turn_index<2:
@@ -187,5 +217,6 @@ async def run(config, room, user_id, instruction):
         if ambiguous or len(updates)!=len(turn['resource_updates']) or len(plans)!=len(turn['plans']):
             turn['notice']='部分候选标识或行程引用尚不明确，已略过这些条目并保留其他有效建议；原有候选未覆盖。'
         turn.update(resources=resources,resource_updates=updates,plans=plans)
+        attach_intake(room,turn)
         return turn['summary'], {'agent':turn, '_prepared_analysis':prepared, 'mode':'ai'}
     return preserve_progress(room,prepared,tool_results)

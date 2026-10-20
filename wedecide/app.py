@@ -292,8 +292,12 @@ async def shared_message(key: str, data: AIInput, request: Request):
         me = domain.member(room, uid)
         domain.require(room["state"] not in domain.TERMINAL, "决策已结束")
         store.append_message(db, room["id"], uid, "user", "shared", data.text, {"name": me["name"]})
+        # Public discussion is decision material too; private chat never enters this path.
+        room['supplements']=[*room.get('supplements',[]),{'id':store.new_id(),'kind':'information','visibility':'shared','member_id':uid,'title':'公开讨论','text':data.text,'at':time.time(),'during_vote':room['state']=='VOTING'}][-100:]
+        room['context_version']=room.get('context_version',0)+1
         store.save_room(db, room)
     hub.publish(room["id"])
+    await maybe_advance_agent(room)
     return {"ok": True}
 
 
@@ -341,11 +345,6 @@ async def maybe_advance_agent(room):
         return
     if shared_ai_key(room) in coordinator.pending or not ai.resolve_provider(store.settings(),room):
         return
-    initial=report.get("attempted_input_version") is None
-    public_changed=report.get("attempted_context_version",0)!=room.get("context_version",0)
-    members=engine.active_members(room)
-    if not (initial or public_changed or (members and all(member["confirmed"] for member in members))):
-        return
     try:
         await queue_room_ai(room, room["host_id"], AIInput(kind="agent", text="这是同一次群体决策的持续整理。承接共同目标、公开提议和已确认数据，归纳备选与关键差异。成员仍在独立回答时，不重复追问他们的私密条件；全体确认后调用校核，再说明群体取舍、缺项与下一步。"))
     except ai.AIError:
@@ -355,9 +354,17 @@ async def maybe_advance_agent(room):
 async def queue_room_ai(room, uid, data):
     config = store.settings()
     key=shared_ai_key(room) if data.kind=="agent" else (room["id"],uid)
+    def mark_phase(phase):
+        with store.transaction() as db:
+            current=store.load_room(db,room['id'])
+            if not current:return
+            current['agent']={**current.get('agent',{}),'phase':phase}
+            db.execute('UPDATE rooms SET data=? WHERE id=?',(store.dumps(current),current['id']))
+        hub.publish(room['id'])
     async def operation():
         if data.kind == "agent":
-            return await agent.run(config, room, uid, data.text)
+            mark_phase('integrating')
+            return await agent.run(config, room, uid, data.text, mark_phase)
         return await ai.complete(config, room, uid, data.kind, data.text, data.draft, data.interview_action)
     async def complete(result, error):
         with store.transaction() as db:
@@ -370,7 +377,7 @@ async def queue_room_ai(room, uid, data):
                 stale = current["input_version"] != room["input_version"] or current.get("context_version",0)!=room.get("context_version",0) or current["round"]!=room["round"] or current["state"] in domain.TERMINAL | {"VOTING"}
                 if prepared is not None and not stale and not agent.current_analysis(current):
                     domain.analyze(current, prepared)
-                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "context_version":room.get("context_version",0), "round":room["round"], "updated":time.time()}
+                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "phase":'error' if error else 'complete', "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "context_version":room.get("context_version",0), "round":room["round"], "updated":time.time()}
                 store.save_room(db, current)
             metadata["request_id"] = data.request_id
             metadata["context_version"] = room.get("context_version",0)
@@ -379,12 +386,16 @@ async def queue_room_ai(room, uid, data):
             store.append_message(db, room["id"], uid, "assistant", data.kind, content, metadata)
         coordinator.pending.pop(key, None)
         hub.publish(room["id"])
+        # A new member confirmation or public note may have arrived mid-request.
+        # Coalesce the burst into one run of the latest snapshot, without a polling gap.
+        if data.kind=='agent' and stale:
+            await maybe_advance_agent(current)
     coordinator.submit(key, operation, complete)
     with store.transaction() as db:
         store.append_message(db, room["id"], uid, "user", data.kind, data.text, {"interview_action":data.interview_action,"preference_version":next(m["preference_version"] for m in room["members"] if m["id"]==uid)})
         current = get_room(db, room["id"])
         if data.kind == "agent":
-            current["agent"] = {**(current.get("agent") or {}), "enabled":(current.get("agent") or {}).get("enabled",True), "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_round":room["round"],"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
+            current["agent"] = {**(current.get("agent") or {}), "enabled":(current.get("agent") or {}).get("enabled",True), "running":True, "phase":"queued", "started":time.time(), "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_round":room["round"],"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
         store.save_room(db, current)
     hub.publish(room["id"])
     return {"queued": True}
@@ -453,6 +464,7 @@ async def save_provider(key: str, request: Request):
         domain.event(room, "provider_changed", "房主更新了房间 AI 接口配置")
         store.save_room(db, room)
     hub.publish(room["id"])
+    await maybe_advance_agent(room)
     return {"ok": True}
 
 

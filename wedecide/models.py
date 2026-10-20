@@ -302,6 +302,20 @@ class DecisionSimulation(Model):
         return self
 
 
+class DecisionSynthesis(Model):
+    common_ground: list[str] = Field(default_factory=list, max_length=3)
+    tradeoffs: list[str] = Field(default_factory=list, max_length=3)
+    recommendation: str = Field(default="", max_length=800)
+    source_ids: list[str] = Field(default_factory=list, max_length=30)
+
+    @field_validator("common_ground", "tradeoffs")
+    @classmethod
+    def concise_points(cls, values):
+        if any(len(value)>600 for value in values):
+            raise ValueError("整理要点过长")
+        return values
+
+
 class DecisionAgentTurn(Model):
     tool: Literal["analyze", "simulate", "respond"] = "respond"
     simulation: DecisionSimulation | None = None
@@ -309,6 +323,7 @@ class DecisionAgentTurn(Model):
     summary: str = Field(min_length=1, max_length=4000)
     next_step: str = Field(default="", max_length=1500)
     questions: list[str] = Field(default_factory=list, max_length=8)
+    synthesis: DecisionSynthesis = Field(default_factory=DecisionSynthesis)
     resources: list[Resource] = Field(default_factory=list, max_length=10)
     resource_updates: list[Resource] = Field(default_factory=list, max_length=10)
     plans: list[ManualPlan] = Field(default_factory=list, max_length=6)

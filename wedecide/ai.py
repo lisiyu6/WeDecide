@@ -526,7 +526,8 @@ class Coordinator:
                 error = str(exc) if isinstance(exc, AIError) else "AI 处理超时或暂时不可用，请稍后重试"
                 await callback(None, error)
             finally:
-                self.pending.pop(key, None)
+                if self.pending.get(key) is asyncio.current_task():
+                    self.pending.pop(key, None)
         self.pending[key] = asyncio.create_task(work())
 
     async def cancel_room(self, room_id):

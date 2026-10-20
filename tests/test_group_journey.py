@@ -14,6 +14,19 @@ app=importlib.import_module('wedecide.app')
 ROOT=Path(__file__).resolve().parents[1]
 
 class GroupJourneyTests(unittest.TestCase):
+    def test_each_confirmed_member_triggers_shared_integration_without_waiting_for_everyone(self):
+        async def run():
+            room=self.room()
+            room['members'].append(domain.new_member('guest','伙伴','approved'))
+            room['agent'].update(attempted_input_version=room['input_version'],attempted_context_version=room['context_version'],attempted_round=room['round'])
+            domain.mutate(room,'host','preference',{'preference':{'cost_preference':'lower'},'preference_version':0},room['revision'],{'max_members':8})
+            queue=AsyncMock()
+            with patch.object(app,'queue_room_ai',queue),patch.object(ai,'resolve_provider',return_value={'enabled':True}),patch.object(store,'settings',return_value={}):
+                await app.maybe_advance_agent(room)
+            queue.assert_awaited_once()
+            self.assertFalse(room['members'][1]['confirmed'])
+        asyncio.run(run())
+
     def room(self):
         value=domain.new_room('host',CreateRoom(username='房主',scenario={'title':'一起决定'}),8)
         value['code']='GROUP001'
