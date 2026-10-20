@@ -107,7 +107,12 @@ class ProviderFixture(BaseHTTPRequestHandler):
             return self.respond(400, {'error': 'missing model or messages'})
         time.sleep(.15)
         content = '本地接口回归回复'
-        if 'Decision Agent JSON Schema' in body['messages'][0]['content']:
+        if 'Date Resolution JSON Schema' in body['messages'][0]['content']:
+            from datetime import date, timedelta
+            data=json.loads(body['messages'][-1]['content'])
+            value=(date.fromisoformat(data['calendar']['date'])+timedelta(days=3)).isoformat()
+            content=json.dumps({'date':value,'explanation':'按提供的当前日期换算三天后。','needs_clarification':False,'question':''},ensure_ascii=False)
+        elif 'Decision Agent JSON Schema' in body['messages'][0]['content']:
             last=body['messages'][-1]['content']
             if '提出通用备选' in last:
                 output={'tool':'respond','goal':'比较技术方向','summary':'已提出可供核对的技术备选。','next_step':'房主采纳草稿并核对事实。','resources':[{'id':'agent-option','kind':'decision','name':'开源方案','description':'可自行部署的候选方向','category':'技术方案','cost':None,'attributes':{'可自行部署':True},'source':'测试场景提供的说明','confirmed':False}]}
@@ -122,7 +127,9 @@ class ProviderFixture(BaseHTTPRequestHandler):
             last=body['messages'][-1]['content']
             instruction=last.rsplit('我的输入：\n',1)[-1]
             ready='请整合当前回答' in instruction or '请先把已有回答整合' in instruction
-            content=json.dumps({'question':'' if ready else '你更希望这次活动带来怎样的体验？', 'left':'' if ready else '轻松聊天', 'right':'' if ready else '探索新体验', 'summary':'根据你的回答，优先考虑轻松交流。', 'ready':ready, 'draft':{'categories':{'休闲':100},'criteria':[{'name':'适合聊天','rating':100}], 'cost_preference':'lower'}, 'insights':['预算具体金额由本人填写']},ensure_ascii=False)
+            output={'question':'' if ready else '你更希望这次活动带来怎样的体验？', 'left':'' if ready else '轻松聊天', 'right':'' if ready else '探索新体验', 'summary':'根据你的回答，优先考虑轻松交流。', 'ready':ready, 'draft':{'categories':{'休闲':100},'criteria':[{'name':'适合聊天','rating':100}], 'cost_preference':'lower'}, 'insights':['预算具体金额由本人填写']}
+            if '上限300' in last:output['draft']['budget_max']=300
+            content=json.dumps(output,ensure_ascii=False)
         elif 'Comparison JSON Schema' in body['messages'][0]['content']:
             content=json.dumps({'summary':'先核对可行方案的行程和未确认资料。','reasons':['根据已提供的行程与费用进行比较'],'risks':['缺失资料需要房主补充'],'next_steps':['本人核对需求后再发起正式投票']},ensure_ascii=False)
         if 'Preference JSON Schema' in body['messages'][0]['content']:
@@ -389,6 +396,46 @@ class ApiWorkflowTests(unittest.TestCase):
         report = host.get(f"/api/rooms/{room['id']}/report")
         self.assertEqual(report.status_code, 200, report.text)
         self.assertEqual(report.json()['result']['outcome'], 'APPROVED')
+
+    def test_knowledge_and_supplements_are_room_scoped_and_independent(self):
+        host,guest,room=self.pair()
+        room=self.action(host,room,'knowledge',text='房间共同背景',knowledge_version=0)
+        path=f"/api/rooms/{room['id']}"
+        stale=room['revision']
+        private=guest.post(path+'/actions',json={'revision':stale,'action':'supplement','payload':{'text':'伙伴私密补充'}})
+        shared=host.post(path+'/actions',json={'revision':stale,'action':'supplement','payload':{'text':'共同补充','visibility':'shared'}})
+        self.assertEqual(private.status_code,200,private.text)
+        self.assertEqual(shared.status_code,200,shared.text)
+        self.assertEqual(host.get(path).json()['knowledge'],'房间共同背景')
+        self.assertNotIn('伙伴私密补充',host.get(path).text)
+        self.assertIn('伙伴私密补充',guest.get(path).text)
+        self.assertIn('共同补充',host.get(path+'/report').text)
+        self.assertNotIn('伙伴私密补充',guest.get(path+'/report').text)
+
+    def test_member_supplement_is_structured_by_room_agent_without_auto_confirmation(self):
+        host,guest,room=self.pair()
+        room=self.configure(host,room)
+        path=f"/api/rooms/{room['id']}"
+        response=guest.post(path+'/actions',json={'revision':room['revision'],'action':'supplement','payload':{'text':'我的预算上限300'}})
+        self.assertEqual(response.status_code,200,response.text)
+        answer=self.replies(guest,room)[0]
+        self.assertEqual(answer['kind'],'interview')
+        self.assertEqual(answer['metadata']['draft']['budget_max'],300)
+        self.assertTrue(answer['metadata']['interview']['ready'])
+        self.assertFalse(guest.get(path).json()['me']['confirmed'])
+        self.assertNotIn('我的预算上限300',host.get(path+'/messages').text)
+
+    def test_room_date_uses_room_provider_and_does_not_change_scenario(self):
+        from datetime import date,timedelta
+        host,room=self.room()
+        room=self.configure(host,room)
+        path=f"/api/rooms/{room['id']}"
+        response=host.post(path+'/date',json={'text':'三天后'})
+        self.assertEqual(response.status_code,200,response.text)
+        result=response.json()
+        self.assertEqual(result['date'],(date.fromisoformat(result['reference_date'])+timedelta(days=3)).isoformat())
+        self.assertEqual(result['timezone'],'Asia/Shanghai')
+        self.assertEqual(host.get(path).json()['scenario']['date'],room['scenario']['date'])
 
     def test_agent_calls_evaluation_and_continues_after_confirmed_changes(self):
         host,room=self.room()

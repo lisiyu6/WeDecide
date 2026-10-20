@@ -5,7 +5,8 @@ import time
 from fastapi import HTTPException
 from pydantic import ValidationError
 from . import engine
-from .models import ManualPlan, Preference, Resource, Rules, Scenario
+from .context import visible_supplements
+from .models import KnowledgeInput, SupplementInput, ManualPlan, Preference, Resource, Rules, Scenario
 from .store import new_id
 
 TERMINAL = {"APPROVED", "NO_CONSENSUS", "NO_FEASIBLE_PROPOSAL", "INSUFFICIENT_DATA", "CANCELLED"}
@@ -41,7 +42,7 @@ def new_room(user_id, data, max_members):
     rules = data.rules.model_dump()
     rules["max_members"] = min(rules["max_members"], max_members)
     now = time.time()
-    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "agent": None, "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
+    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "agent": None, "knowledge":"", "knowledge_version":0, "context_version":1, "supplements":[], "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
     event(room, "created", "房间已创建，等待成员加入并确认各自需求")
     return room
 
@@ -150,7 +151,7 @@ def negotiate(room, user_id):
 def mutate(room, user_id, action, payload, revision, limits):
     m = member(room, user_id)
     tick(room)
-    independent = {"preference", "vote", "answer_request", "feedback", "attendance"}
+    independent = {"preference", "vote", "answer_request", "feedback", "attendance", "supplement", "knowledge"}
     if action not in independent:
         require(revision == room["revision"], "房间已经更新，请刷新后重新操作", 409)
     if action == "attendance":
@@ -191,6 +192,22 @@ def mutate(room, user_id, action, payload, revision, limits):
         room["resources"] = resources
         room["resource_version"] += 1
         invalidate(room, "房主更新备选方案，所有方案按新数据重新评价")
+    elif action == "knowledge":
+        host(room, user_id)
+        editable(room)
+        knowledge=KnowledgeInput(**payload)
+        require(knowledge.knowledge_version==room.get("knowledge_version",0), "房主知识已在另一页面更新，请重新核对",409)
+        room["knowledge"]=knowledge.text.strip()
+        room["knowledge_version"]=room.get("knowledge_version",0)+1
+        room["context_version"]=room.get("context_version",0)+1
+        event(room,"knowledge","房主更新了本次决策的前置知识")
+    elif action == "supplement":
+        item=SupplementInput(**payload).model_dump()
+        item.update(id=new_id(),member_id=user_id,at=time.time(),during_vote=room["state"]=="VOTING")
+        room["supplements"]=[*room.get("supplements",[]),item][-100:]
+        if item["visibility"]=="shared":
+            room["context_version"]=room.get("context_version",0)+1
+            event(room,"supplement","一位成员补充了共同决策资料"+("（不改变本轮投票快照）" if item["during_vote"] else ""))
     elif action == "agent_toggle":
         host(room, user_id)
         require(isinstance(payload.get("enabled"), bool), "请选择是否自动推进")
@@ -200,13 +217,18 @@ def mutate(room, user_id, action, payload, revision, limits):
         host(room, user_id)
         editable(room)
         report = room.get("agent")
-        require(report and report["input_version"] == room["input_version"], "Agent 草稿已过期，请让 Agent 继续后再采纳", 409)
+        require(report and report["input_version"] == room["input_version"] and report.get("context_version",0)==room.get("context_version",0), "Agent 草稿已过期，请让 Agent 继续后再采纳", 409)
         require(not report.get("running") and not report.get("error") and not report.get("stale"), "Agent 仍在处理或结果不可用，请继续后重试")
         require(not report.get("applied"), "这份 Agent 草稿已采纳", 409)
         additions = [Resource(**resource).model_dump() for resource in report.get("resources", [])]
+        updates = [Resource(**resource).model_dump() for resource in report.get("resource_updates", [])]
         plans = [ManualPlan(**plan).model_dump() for plan in report.get("plans", [])]
         require(len(room["resources"])+len(additions)<=20, "候选条目总数最多 20 个，请先整理已有候选")
         known = {resource["id"] for resource in room["resources"]}
+        require(len({resource["id"] for resource in updates})==len(updates),"修正候选 ID 重复")
+        require(all(resource["id"] in known for resource in updates),"修正的候选已不存在，请让 Agent 重新整理",409)
+        for resource in updates:
+            resource["confirmed"] = resource["verified"] = False
         for resource in additions:
             require(resource["id"] not in known, "Agent 建议的候选标识重复，请重新生成")
             resource["confirmed"] = resource["verified"] = False
@@ -215,6 +237,8 @@ def mutate(room, user_id, action, payload, revision, limits):
         require(len(room.get("manual_plans", []))+len(plans)<=6, "自定义行程最多 6 个")
         for plan in plans:
             plan["id"] = new_id()
+        by_id={resource["id"]:resource for resource in updates}
+        room["resources"]=[by_id.get(resource["id"],resource) for resource in room["resources"]]
         room["resources"].extend(additions)
         room["manual_plans"] = room.get("manual_plans", [])+plans
         report["applied"] = True
@@ -376,6 +400,10 @@ def view(room, user_id, online=()):
         return {"id": room["id"], "code": room["code"], "revision": room["revision"], "scenario": {"title": room["scenario"]["title"]}, "state": room["state"], "me": {"id": m["id"], "name": m["name"], "status": m["status"]}}
     r = {k: deepcopy(room[k]) for k in ("id", "code", "revision", "state", "host_id", "created", "updated", "scenario", "rules", "resources", "resource_version", "input_version", "analysis_version", "analysis", "proposals", "history", "selected_id", "round", "events", "result", "provider_id")}
     r["members"] = [{k: deepcopy(x[k]) for k in ("id", "name", "status", "confirmed", "preference_version", "attendance")} | {"online": x["id"] in online} for x in room["members"] if x["status"] == "approved" or user_id == room["host_id"]]
+    r["knowledge"] = room.get("knowledge", "")
+    r["knowledge_version"] = room.get("knowledge_version", 0)
+    r["context_version"] = room.get("context_version", 0)
+    r["supplements"] = deepcopy(visible_supplements(room,user_id))
     r["agent"] = deepcopy(room.get("agent"))
     r["manual_plans"] = deepcopy(room.get("manual_plans", []))
     r["me"] = deepcopy(m)

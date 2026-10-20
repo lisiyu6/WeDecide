@@ -271,10 +271,53 @@ class DecisionAgentTurn(Model):
     next_step: str = Field(default="", max_length=1500)
     questions: list[str] = Field(default_factory=list, max_length=8)
     resources: list[Resource] = Field(default_factory=list, max_length=10)
+    resource_updates: list[Resource] = Field(default_factory=list, max_length=10)
     plans: list[ManualPlan] = Field(default_factory=list, max_length=6)
 
     @model_validator(mode="after")
     def bounded_questions(self):
         if any(len(question) > 1000 for question in self.questions):
             raise ValueError("待补信息过长")
+        return self
+
+
+class KnowledgeInput(Model):
+    text: str = Field(default="", max_length=12000)
+    knowledge_version: int = Field(ge=0)
+
+
+class SupplementInput(Model):
+    title: str = Field(default="", max_length=80)
+    text: str = Field(min_length=1, max_length=2000)
+    visibility: Literal["private", "shared"] = "private"
+
+    @field_validator("text")
+    @classmethod
+    def real_text(cls, value):
+        if not value.strip():
+            raise ValueError("请填写补充信息")
+        return value.strip()
+
+
+class DateInput(Model):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class DateResolution(Model):
+    date: str = Field(default="", max_length=10)
+    explanation: str = Field(default="", max_length=1000)
+    needs_clarification: bool = False
+    question: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def specific_or_question(self):
+        from datetime import date as calendar_date
+        if self.needs_clarification:
+            self.date=""
+            if not self.question.strip():
+                raise ValueError("日期有歧义时需要追问")
+        elif not self.date:
+            raise ValueError("请返回日期或澄清问题")
+        else:
+            self.date=calendar_date.fromisoformat(self.date).isoformat()
         return self

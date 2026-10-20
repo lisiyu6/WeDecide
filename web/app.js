@@ -1,11 +1,12 @@
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
+import {contextDrawer,mountContextDrawer,resolveDate} from './context.js';
 import {manualPlanForm} from './decision.js';
 import {home,creation,joinPage,waiting,accountPage} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
 import {readPreference,updatePreferenceFeedback,mountPreferenceEditor,goToPreferenceStep,latestInterview,interviewDraft} from './preferences.js';
 
-const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
+const state={bootstrap:null,room:null,rooms:[],tab:'overview',route:'home',code:'',messages:[],hasOlder:false,provider:null,connected:false,chatMode:'private',chatRaw:'',interviewRaw:'',prefDraft:null,simFairness:null,menu:false,contextOpen:false,contextTab:'supplements',contextDraft:null,creationDraft:loadDraft('wd-create')||{},dirtyForms:new Set(),formRevisions:{},savingPreferences:new Set()};
 let stream=null,deletingRoom=null,routeVersion=0,refreshing=false,refreshAgain=false,deadlineRefresh=false,displayTimer=null;
 const roomPath=suffix=>`/api/rooms/${encodeURIComponent(state.room.id)}${suffix}`;
 const draftKey=()=>`wd-pref:${state.room.id}:${state.room.me.id}`;
@@ -45,7 +46,8 @@ function render(preserve=false) {
  else if(state.route==='new')root.innerHTML=creation(state.bootstrap,state.creationDraft);
  else if(state.route==='join')root.innerHTML=joinPage(state.code,state.bootstrap);
  else if(state.route==='auth')root.innerHTML=accountPage(state.bootstrap,state.authMode,state.authNext);
- else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state):waiting(state.room);
+ else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state)+contextDrawer(state):waiting(state.room);
+ mountContextDrawer(root);
  if(saved)restoreInputs(root,saved);
  for(const id of expanded){const detail=$$('details[data-proposal-detail]',root).find(el=>el.dataset.proposalDetail===id);if(detail)detail.open=true;}
  const roomView=state.route==='room'&&state.room?.me.status==='approved'?$('#room-view',root):null;
@@ -98,7 +100,7 @@ function connect() {
 }
 async function route() {
  const version=++routeVersion;stream?.close();stream=null;clearInterval(displayTimer);
- state.connected=false;state.menu=false;state.voteSession=null;state.dirtyForms.clear();state.formRevisions={};
+ state.connected=false;state.menu=false;state.contextOpen=false;document.body.classList.remove('context-open');state.voteSession=null;state.dirtyForms.clear();state.formRevisions={};
  const url=new URL(location.href),parts=url.pathname.split('/').filter(Boolean);
  try{
    if(parts[0]==='display'&&parts[1]){state.route='display';await showDisplay(parts[1],version);if(version===routeVersion)displayTimer=setInterval(()=>showDisplay(parts[1],version),8000);return;}
@@ -127,7 +129,7 @@ async function route() {
      if(version!==routeVersion)return;
      state.code=code;state.tab=tab;state.room=room;state.route='room';state.messages=messages;state.provider=provider;state.hasOlder=messages.length===50;
      if(previousRoom!==room.id){state.prefAiOpen=false;state.simFairness=null;state.chatMode='private';state.prefDraft=loadDraft(draftKey());state.prefStep=state.prefDraft?.step??0;}
-     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';
+     state.chatRaw=loadDraft(chatKey())||'';state.interviewRaw=loadDraft(`wd-interview:${room.id}:${room.me.id}`)||'';state.contextDraft=loadDraft(`wd-context:${room.id}:${room.me.id}`)||{};
      render();connect();return;
    }
    const rooms=await api('/api/rooms');if(version!==routeVersion)return;
@@ -154,6 +156,23 @@ async function mutate(action,payload={},revision=null) {
 }
 function readRules(d,defaults={}) {return {...defaults,threshold:Number(d.threshold)/100,fairness:Number(d.fairness)/100,max_members:Number(d.max_members),max_rounds:Number(d.max_rounds),vote_seconds:Number(d.vote_seconds),...(d.max_activities?{min_activities:Number(d.min_activities||1),max_activities:Number(d.max_activities),transfer_minutes:Number(d.transfer_minutes),transfer_cost:Number(d.transfer_cost)}:{})};}
 function readScenario(d) {return {title:d.title.trim(),city:d.city.trim(),date:d.date,description:d.description,reference_budget:number(d.reference_budget)};}
+async function saveRoomContext(action,payload){
+ const key=state.room.id,version=routeVersion;
+ const room=await post(roomPath('/actions'),{revision:state.room.revision,action,payload});
+ if(version!==routeVersion||state.room?.id!==key)return;
+ state.room={...room,ai_pending:state.room.ai_pending};
+ state.dirtyForms.delete(action==='knowledge'?'knowledge-form':'supplement-form');
+ if(action==='supplement'){state.contextDraft={};deleteDraft(`wd-context:${key}:${room.me.id}`);}
+ render(true);await refresh(true);
+}
+async function resolveFormDate(form){
+ const version=routeVersion,room=formId(form)==='room-settings'?state.room:null;
+ const answer=await resolveDate(form,room);
+ if(version!==routeVersion)return;
+ state.dirtyForms.add(formId(form));
+ if(formId(form)==='create-room'){state.creationDraft={...state.creationDraft,date_expression:form.elements.date_expression.value,scenario:readScenario(formData(form))};saveDraft('wd-create',state.creationDraft);}
+ return answer;
+}
 async function resourceDialog(resource={}) {state.resourceRevision=state.room.revision;dialog(resource.id?'核对备选方案':'补充备选方案',resourceForm(resource));}
 installProviderModels(form=>{
  if(form.elements.mode.value!=='custom')throw new Error('请先选择房间专用接口，再填写端点与密钥');
@@ -166,6 +185,11 @@ async function askInterview(text) {
  state.room.ai_pending=true;state.interviewRaw='';state.dirtyForms.delete('interview-form');deleteDraft(`wd-interview:${state.room.id}:${state.room.me.id}`);state.prefStep=0;render(true);
 }
 const handlers={
+ 'context-open':()=>{state.contextOpen=true;render(true);},
+ 'context-close':()=>{state.contextOpen=false;render(true);$('[data-action="context-open"]')?.focus();},
+ 'context-tab':el=>{state.contextTab=el.dataset.tab;render(true);},
+ 'context-to-preferences':()=>navigate(`/r/${state.room.code}?view=preferences`),
+ 'resolve-date':el=>resolveFormDate(el.closest('form')),
  'menu':()=>{state.menu=!state.menu;$('.sidebar')?.classList.toggle('open',state.menu);const backdrop=$('.sidebar-backdrop');if(backdrop)backdrop.hidden=!state.menu;$('.mobile-menu')?.setAttribute('aria-expanded',String(state.menu));},
  'account-logout':async()=>{await post('/api/auth/logout');stream?.close();state.bootstrap=null;state.room=null;state.messages=[];state.prefDraft=null;state.creationDraft={};deleteDraft('wd-create');navigate('/');},
  'refresh':()=>refresh(true),
@@ -228,6 +252,7 @@ async function submit(form) {
    const result=await post('/api/scenario',{text:d.text,kind:'scenario'});state.creationDraft={...state.creationDraft,...result};saveDraft('wd-create',state.creationDraft);state.dirtyForms.clear();render();toast(result.text);break;
   }
   case 'create-room':{
+   if(d.date_expression?.trim()&&form.elements.date.dataset.expression!==d.date_expression.trim()){const resolved=await resolveFormDate(form);if(!resolved)return;d.date=resolved.date;}
    const room=await post('/api/rooms',{username:d.username,scenario:readScenario(d),rules:readRules(d),demo:form.elements.demo.checked});
    if(state.creationDraft.resources?.length&&!form.elements.demo.checked){
     try{await post(`/api/rooms/${room.id}/actions`,{revision:room.revision,action:'resources',payload:{resources:state.creationDraft.resources}});}catch(error){toast(`房间已创建，候选草稿未保存：${error.message}`,true);}
@@ -276,7 +301,9 @@ async function submit(form) {
    const resources=d.id?state.room.resources.map(r=>r.id===d.id?resource:r):[...state.room.resources,resource];
    await mutate('resources',{resources},state.resourceRevision);$('#dialog').close();toast('备选方案已保存，Agent 将按新信息继续');break;
   }
-  case 'room-settings':await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
+  case 'knowledge-form':await saveRoomContext('knowledge',{text:d.text,knowledge_version:Number(d.knowledge_version)});toast('前置知识已更新，房间 Agent 会统一参考');break;
+  case 'supplement-form':await saveRoomContext('supplement',{title:d.title,text:d.text,visibility:d.visibility});toast('已交给房间 Agent'+(d.visibility==='shared'?'，将用于共同决策':'私密整理，请在我的需求核对结果'));break;
+  case 'room-settings':if(d.date_expression?.trim()&&form.elements.date.dataset.expression!==d.date_expression.trim()){const resolved=await resolveFormDate(form);if(!resolved)return;d.date=resolved.date;}await mutate('settings',{scenario:readScenario(d),rules:readRules(d,state.room.rules)},state.formRevisions[formId(form)]);toast('场景与规则已更新');break;
   case 'room-provider':{
    await api(roomPath('/provider'),{method:'PUT',body:{revision:state.formRevisions[formId(form)]??state.room.revision,provider_id:d.provider_id,provider:d.mode==='custom'?readProvider(form):null}});
    state.provider=null;state.dirtyForms.delete(formId(form));delete state.formRevisions[formId(form)];await refresh(false);toast('接口配置已保存');break;
@@ -303,6 +330,7 @@ document.addEventListener('submit',async event=>{
 });
 document.addEventListener('input',event=>{
  const form=event.target.form;if(!form)return;
+ if(event.target.name==='date'&&form.elements.date_expression){form.elements.date_expression.value='';delete event.target.dataset.expression;}
  state.dirtyForms.add(formId(form));
  if(state.room)state.formRevisions[formId(form)]??=state.room.revision;
  if(formId(form)==='preference-form'){
@@ -312,7 +340,8 @@ document.addEventListener('input',event=>{
  else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
  else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
  else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;setText('#fairness-label',`${event.target.value}%`,form);}
- else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
+ else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,date_expression:d.date_expression||'',scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
+ else if(formId(form)==='supplement-form'){state.contextDraft=formData(form);saveDraft(`wd-context:${state.room.id}:${state.room.me.id}`,state.contextDraft);}
  else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;saveDraft('wd-create',state.creationDraft);}
 });
 document.addEventListener('change',event=>{
@@ -323,6 +352,11 @@ document.addEventListener('change',event=>{
 });
 document.addEventListener('toggle',event=>{if(event.target.id==='preference-ai')state.prefAiOpen=event.target.open;},true);
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.menu)handlers.menu();});
+document.addEventListener('cancel',event=>{if(event.target.id==='context-drawer'){event.preventDefault();handlers['context-close']();}},true);
+let contextSwipe=null;
+document.addEventListener('pointerdown',event=>{if(event.button!==0||event.target.closest('input,textarea,select,button,a'))return;if(state.route==='room'&&state.room?.me.status==='approved'&&(state.contextOpen?event.target.closest('[data-context-handle]'):event.clientX>=innerWidth-24))contextSwipe={x:event.clientX,y:event.clientY,close:state.contextOpen};});
+document.addEventListener('pointerup',event=>{if(!contextSwipe)return;const dx=event.clientX-contextSwipe.x,dy=event.clientY-contextSwipe.y,close=contextSwipe.close;contextSwipe=null;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3&&(close?dx>0:dx<0))handlers[close?'context-close':'context-open']();});
+document.addEventListener('pointercancel',()=>{contextSwipe=null;});
 window.addEventListener('popstate',()=>void route());
 window.addEventListener('beforeunload',()=>stream?.close());
 function countdown(){

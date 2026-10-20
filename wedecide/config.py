@@ -9,6 +9,7 @@ if not WEB_DIR.is_dir():
 DEFAULT_DATA = ROOT / "data" if (ROOT / "web").is_dir() else Path.cwd() / "data"
 DATA_DIR = Path(os.environ.get("WEDECIDE_DATA_DIR", str(DEFAULT_DATA))).expanduser().resolve()
 DB_PATH = DATA_DIR / "wedecide.sqlite3"
+TIMEZONE = os.environ.get("WEDECIDE_TIMEZONE", "Asia/Shanghai")
 HOST = os.environ.get("WEDECIDE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("WEDECIDE_PORT", "8000"))
 PUBLIC_URL = os.environ.get("WEDECIDE_PUBLIC_URL", "").rstrip("/")

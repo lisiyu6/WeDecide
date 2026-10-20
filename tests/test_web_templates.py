@@ -117,5 +117,22 @@ class DecisionFlowTemplateTests(unittest.TestCase):
         self.assertEqual(domain.display_view(room)['proposals'][0]['evaluation']['kind'],'decision')
 
 
+class ContinuousInputTemplateTests(unittest.TestCase):
+    def test_drawer_and_optional_date_conversion_are_part_of_real_forms(self):
+        script="""
+          import {contextDrawer,dateField} from './web/context.js';
+          import {creation} from './web/pages.js';
+          const room={state:'COLLECTING',host_id:'host',me:{id:'host',status:'approved'},members:[],supplements:[]};
+          console.log(JSON.stringify({knowledge:contextDrawer({room,contextOpen:true,contextTab:'knowledge'}),notes:contextDrawer({room,contextOpen:true}),create:creation({account:{username:'test'},limits:{max_members:8}})}));
+        """
+        result=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
+        html=json.loads(result.stdout)
+        self.assertEqual(len([attrs for tag,attrs in Elements(html['knowledge']).nodes if tag=='form' and attrs.get('id')=='knowledge-form']),1)
+        self.assertIn('name="visibility"',html['notes'])
+        self.assertIn('仅本人可见，交给房间 Agent 私密整理',html['notes'])
+        self.assertIn('data-action="resolve-date"',html['create'])
+        self.assertIn('name="date_expression"',html['create'])
+
+
 if __name__ == '__main__':
     unittest.main()

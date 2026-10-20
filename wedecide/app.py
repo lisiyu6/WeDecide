@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from . import accounts, agent, ai, domain, engine, store
 from .cli import verify_password
 from .config import WEB_DIR, PUBLIC_URL, SECURE_COOKIE, ALLOWED_ORIGINS
-from .models import AIInput, CreateRoom, JoinRoom, Login, ModelDiscovery, Mutation
+from .models import DateInput, AIInput, CreateRoom, JoinRoom, Login, ModelDiscovery, Mutation
 from .realtime import Hub
 
 hub = Hub()
@@ -78,7 +78,8 @@ async def maintenance():
                 if changed:
                     store.save_room(db, room)
                     hub.publish(key)
-            await maybe_advance_agent(room)
+            await maybe_process_supplements(room)
+            await maybe_advance_agent(current_room(key))
             await asyncio.sleep(0)
         with store.transaction() as db:
             db.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
@@ -238,7 +239,8 @@ async def room_action(key: str, data: Mutation, request: Request):
         domain.mutate(room, uid, data.action, data.payload, data.revision, store.settings(db))
         store.save_room(db, room)
     hub.publish(room["id"])
-    await maybe_advance_agent(room)
+    await maybe_process_supplements(room)
+    await maybe_advance_agent(current_room(room["id"]))
     return domain.view(current_room(key), uid, hub.online(room["id"]))
 
 
@@ -307,9 +309,27 @@ async def room_ai(key: str, data: AIInput, request: Request):
     return await queue_room_ai(room, uid, data)
 
 
+async def maybe_process_supplements(room):
+    if room["state"] in domain.TERMINAL | {"VOTING"} or not ai.resolve_provider(store.settings(),room):
+        return
+    for member in engine.active_members(room):
+        items=[item for item in room.get("supplements",[]) if item["member_id"]==member["id"] and item["visibility"]=="private"]
+        if not items or items[-1]["id"]==member.get("supplement_cursor") or (room["id"],member["id"]) in coordinator.pending:
+            continue
+        try:
+            await queue_room_ai(room,member["id"],AIInput(kind="interview",text="请根据我补充的资料和已有选择，整理算法所需的个人条件草稿；事实与喜好分开，未明确的必要条件不要猜。请先把已有回答整合成需求表，ready=true，供我确认。",request_id=items[-1]["id"]))
+        except ai.AIError:
+            continue
+        with store.transaction() as db:
+            current=store.load_room(db,room["id"])
+            if current:
+                domain.member(current,member["id"])["supplement_cursor"]=items[-1]["id"]
+                store.save_room(db,current)
+
+
 async def maybe_advance_agent(room):
     report = room.get("agent") or {}
-    if not report.get("enabled") or report.get("attempted_input_version") == room["input_version"] or room["state"] in domain.TERMINAL | {"VOTING"} or not all(member["confirmed"] for member in engine.active_members(room)):
+    if not report.get("enabled") or (report.get("attempted_input_version") == room["input_version"] and report.get("attempted_context_version",0)==room.get("context_version",0)) or room["state"] in domain.TERMINAL | {"VOTING"} or not all(member["confirmed"] for member in engine.active_members(room)):
         return
     if (room["id"], room["host_id"]) in coordinator.pending:
         return
@@ -333,12 +353,13 @@ async def queue_room_ai(room, uid, data):
             content, metadata = (error, {"error": True}) if error else result
             prepared = metadata.pop("_prepared_analysis", None)
             if data.kind == "agent":
-                stale = current["input_version"] != room["input_version"] or current["state"] in domain.TERMINAL | {"VOTING"}
+                stale = current["input_version"] != room["input_version"] or current.get("context_version",0)!=room.get("context_version",0) or current["state"] in domain.TERMINAL | {"VOTING"}
                 if prepared is not None and not stale:
                     domain.analyze(current, prepared)
-                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "updated":time.time()}
+                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "context_version":room.get("context_version",0), "updated":time.time()}
                 store.save_room(db, current)
             metadata["request_id"] = data.request_id
+            metadata["context_version"] = room.get("context_version",0)
             metadata["input_version"] = room["input_version"]
             metadata["preference_version"] = next(m["preference_version"] for m in room["members"] if m["id"] == uid)
             store.append_message(db, room["id"], uid, "assistant", data.kind, content, metadata)
@@ -349,7 +370,7 @@ async def queue_room_ai(room, uid, data):
         store.append_message(db, room["id"], uid, "user", data.kind, data.text)
         current = get_room(db, room["id"])
         if data.kind == "agent":
-            current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"]}
+            current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0)}
         store.save_room(db, current)
     hub.publish(room["id"])
     return {"queued": True}
@@ -365,6 +386,21 @@ async def bounded_call(key, operation, timeout=240):
         raise HTTPException(504, "第三方请求超时，请重试") from None
     finally:
         coordinator.pending.pop(key, None)
+
+
+@app.post("/api/date/resolve")
+async def date_draft(data: DateInput, request: Request):
+    uid=authenticated(request)
+    return await bounded_call(("date",uid),lambda:ai.resolve_date(store.settings(),None,data.text))
+
+
+@app.post("/api/rooms/{key}/date")
+async def room_date(key: str, data: DateInput, request: Request):
+    uid=authenticated(request)
+    room=current_room(key)
+    domain.host(room,uid)
+    domain.editable(room)
+    return await bounded_call(("date",uid),lambda:ai.resolve_date(store.settings(),room,data.text))
 
 
 @app.post("/api/scenario")
@@ -440,6 +476,7 @@ async def report(key: str, request: Request):
     domain.require(data["me"]["status"] == "approved", "未获准查看报告", 403)
     # Report is shareable: omit personal preferences, original feedback, private
     # requests, private vote reasons, and the public-display capability token.
+    data["supplements"] = [item for item in data.get("supplements",[]) if item["visibility"]=="shared"]
     for field in ("me", "requests", "share_token", "provider_id", "feedback"):
         data.pop(field, None)
     for vote in [data.get("vote"), *data.get("vote_history", [])]:
