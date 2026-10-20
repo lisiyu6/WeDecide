@@ -72,9 +72,9 @@ AI 请求按 kind 使用同一套供应商选择、并发和消息隔离机制�
 
 - `interview`：可带当前 `draft`（Preference）及 `request_id`。结果 metadata 包含 `interview`（question、left、right、summary、insights、ready）和 `draft`；不确认成员、不改变正式偏好。题目由模型动态生成。可带 interview_action=answer（默认）/start/continue/finish；本轮最多四问，重复题或 finish 直接整理。metadata.interview_progress 返回 asked、limit、reason，warnings/mode 标明保留旧草稿的降级。
 - `explain`：metadata.explanation 包含 summary、reasons、risks、next_steps，依据本人上下文与当前方案解释取舍，仅本人可见。
-- `agent`：仅房主可以主动调用。模型根据公开状态自主响应或请求 analyze 工具，单轮最多三次模型请求，包含结构修复。实际工具结果返回模型继续分析，当前输入版本仍有效且不在投票/结束时才安装分析结果。房间快照 `agent` 提供共享总结、下一步和待采纳草稿，`agent_pending` 表示是否在执行。
+- `agent`：仅房主可以主动调用。模型根据公开状态自主响应或请求 analyze 工具，单轮最多三次模型请求，包含结构修复。实际工具结果返回模型继续分析，当前输入版本仍有效且不在投票/结束时才安装分析结果。房间快照 `agent` 提供共享总结、下一步和待采纳草稿，`agent_pending` 表示共同整理是否在执行。GET 房间还提供 ai_available（布尔值，不包含配置或密钥）。
 
-启动 Agent 后，成员确认与候选变化可按新 input_version 自动推进；每个版本只自动尝试一次，失败由用户重试。新公开 suggestion 可在个人需求尚未全部确认时触发归纳，正式计算仍要求全体确认。正式投票与结束期间不自动推进。Agent 连续目标保存在房间 `agent` 报告中，不依赖浏览器常驻。
+共同整理默认启用，无需独立启动；已有房间 agent=null 也按默认流程处理。首次收集和公开上下文变化允许先整理备选，全员确认后才允许正式校核。成员确认与候选变化按新 input_version 推进；每个版本只自动尝试一次，失败由用户重试。新公开 suggestion 可在个人需求尚未全部确认时触发归纳，正式计算仍要求全体确认。正式投票与结束期间不自动推进。Agent 连续目标保存在房间 `agent` 报告中，不依赖浏览器常驻。
 
 草稿永远不替成员确认正式条件。异步结果带生成时的 input_version、preference_version 和 request_id；旧草稿须重新核对。Agent 的内部 `_prepared_analysis` 不进入消息响应。
 
@@ -137,3 +137,7 @@ OpenAI 兼容供应商的 `endpoint` 可填根地址或以 `/v1` 结尾的基址
 - 账号名比较进行 Unicode NFKC 与大小写归一化；保存 scrypt 密码哈希。管理员登录接口和账号独立。
 
 结构化输出最多校验修复一次，受原任务时间限制；Agent 修复同时计入三次模型调用预算。兼容接口自动 JSON 模式只在未显式配置 response_format 时启用，明确拒绝参数则退回并缓存能力十分钟（最多64条）。持续格式错误返回 mode=preserved 和明确 notice/warnings；保留已完成的工具结果及当前有效草稿，未猜测新条件。场景失败则 mode=local，原始目标保留，不填写猜测日期和候选。真实网络与鉴权错误仍明确报告。
+
+共同整理使用内部队列键 (room_id, @shared-decision)，成员私密卡片/说明使用 (room_id, member_id)，仍共用同一房间供应商和全局容量限制。共同整理不占用房主的私密请求槽。ai_pending 仅表示本人请求，agent_pending 表示共同整理；未确认的私密卡片不触发群体正式计算。已有当前输入版本的真实评价会复用，不因再次说明取舍而清除 selected_id 或重建投票对象。
+
+interview 的卡片结果新增 targets（本次算法实际支持的 Preference 字段名，最多四项）及 purpose（普通语言的用途，最长240字）。非 ready 卡片必须两者有效；校验失败有一次有限修复机会，不能把无计算目标的闲聊直接当作问题。请求上下文 algorithm_contract 来自实际字段用途、本人已有条件、候选布尔属性差异、资料缺项与当前版本的本人实际匹配；通用备选不会主动追问不支持的活动排程字段。候选费用/事实缺失属于房主资料核对，不能由成员猜测补齐。

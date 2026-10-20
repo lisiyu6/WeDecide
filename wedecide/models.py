@@ -246,6 +246,8 @@ class InterviewResult(Model):
     summary: str = Field(default="", max_length=3000)
     insights: list[str] = Field(default_factory=list, max_length=10)
     ready: bool = False
+    targets: list[Literal["budget_max","budget_target","budget_weight","cost_preference","available_start","available_end","max_duration","preferred_start","preferred_end","time_weight","categories","activity_weight","excluded_categories","allowed_locations","criteria"]] = Field(default_factory=list,max_length=4)
+    purpose: str = Field(default="",max_length=240)
     draft: Preference
 
     @model_validator(mode="after")
