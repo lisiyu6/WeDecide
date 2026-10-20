@@ -211,7 +211,8 @@ async def room_state(key: str, request: Request):
     room = current_room(key)
     result = domain.view(room, uid, hub.online(room["id"]))
     result["ai_pending"] = (room["id"], uid) in coordinator.pending
-    result["agent_pending"] = bool(room.get("agent", {}).get("running") and (room["id"], room["host_id"]) in coordinator.pending) if room.get("agent") else False
+    result["agent_pending"] = shared_ai_key(room) in coordinator.pending
+    result["ai_available"] = bool(ai.resolve_provider(store.settings(),room))
     return result
 
 
@@ -327,25 +328,32 @@ async def maybe_process_supplements(room):
                 store.save_room(db,current)
 
 
+def shared_ai_key(room):
+    # One public decision context; private member questions remain independent.
+    return (room["id"], "@shared-decision")
+
+
 async def maybe_advance_agent(room):
     report = room.get("agent") or {}
-    suggestions=[item for item in room.get("supplements",[]) if item.get("kind")=="suggestion"]
-    new_suggestions=bool(suggestions and suggestions[-1]["id"]!=report.get("attempted_suggestion_id"))
     attempted=(report.get("attempted_input_version")==room["input_version"] and report.get("attempted_context_version",0)==room.get("context_version",0))
-    if not report.get("enabled") or attempted or room["state"] in domain.TERMINAL | {"VOTING"}:
+    if report.get("enabled",True) is False or attempted or room["state"] in domain.TERMINAL | {"VOTING"}:
         return
-    if not new_suggestions and not all(member["confirmed"] for member in engine.active_members(room)):
+    if shared_ai_key(room) in coordinator.pending or not ai.resolve_provider(store.settings(),room):
         return
-    if (room["id"], room["host_id"]) in coordinator.pending:
+    initial=report.get("attempted_input_version") is None
+    public_changed=report.get("attempted_context_version",0)!=room.get("context_version",0)
+    members=engine.active_members(room)
+    if not (initial or public_changed or (members and all(member["confirmed"] for member in members))):
         return
     try:
-        await queue_room_ai(room, room["host_id"], AIInput(kind="agent", text="共同决策资料或成员提议有更新。先整合公开提议和资料缺口；满足条件时调用校核工具，再解释取舍与下一步。"))
+        await queue_room_ai(room, room["host_id"], AIInput(kind="agent", text="这是同一次群体决策的持续整理。承接共同目标、公开提议和已确认数据，归纳备选与关键差异。成员仍在独立回答时，不重复追问他们的私密条件；全体确认后调用校核，再说明群体取舍、缺项与下一步。"))
     except ai.AIError:
         pass
 
 
 async def queue_room_ai(room, uid, data):
     config = store.settings()
+    key=shared_ai_key(room) if data.kind=="agent" else (room["id"],uid)
     async def operation():
         if data.kind == "agent":
             return await agent.run(config, room, uid, data.text)
@@ -368,14 +376,14 @@ async def queue_room_ai(room, uid, data):
             metadata["input_version"] = room["input_version"]
             metadata["preference_version"] = next(m["preference_version"] for m in room["members"] if m["id"] == uid)
             store.append_message(db, room["id"], uid, "assistant", data.kind, content, metadata)
-        coordinator.pending.pop((room["id"], uid), None)
+        coordinator.pending.pop(key, None)
         hub.publish(room["id"])
-    coordinator.submit((room["id"], uid), operation, complete)
+    coordinator.submit(key, operation, complete)
     with store.transaction() as db:
         store.append_message(db, room["id"], uid, "user", data.kind, data.text, {"interview_action":data.interview_action,"preference_version":next(m["preference_version"] for m in room["members"] if m["id"]==uid)})
         current = get_room(db, room["id"])
         if data.kind == "agent":
-            current["agent"] = {**(current.get("agent") or {}), "enabled":True, "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
+            current["agent"] = {**(current.get("agent") or {}), "enabled":(current.get("agent") or {}).get("enabled",True), "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
         store.save_room(db, current)
     hub.publish(room["id"])
     return {"queued": True}
@@ -439,6 +447,8 @@ async def save_provider(key: str, request: Request):
         room["provider_id"] = selected
         domain.require(data.get("provider") is None or isinstance(data["provider"], dict), "供应商配置必须为 JSON 对象")
         room["provider"] = ai.merge_provider(data["provider"], room["provider"]) if data.get("provider") else None
+        if room.get("agent"):
+            room["agent"].update(attempted_input_version=None,attempted_context_version=None)
         domain.event(room, "provider_changed", "房主更新了房间 AI 接口配置")
         store.save_room(db, room)
     hub.publish(room["id"])

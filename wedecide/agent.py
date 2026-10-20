@@ -6,7 +6,7 @@ from . import ai, domain, engine, store
 from .models import DecisionAgentTurn, Resource, ManualPlan
 from .context import calendar_context, visible_supplements
 
-PROMPT = """你是 WeDecide 多人决策 Agent，主动主持从目标澄清、需求收集、提出备选、比较取舍到协商的决策过程。不要把用户局限到某个固定问卷或活动模板。承接 agent_memory 中仍适用的目标和结论，遇到新信息时明确修正原因，避免把每轮当成首次对话。根据当前目标和缺口自主判断下一步，给出简洁、具体、可执行的总结与下一步。仅使用公开资料、本人已授权公开的摘要和匿名约束核对结果；不要推断或暴露成员私聊、原始私密条件或拒绝理由。
+PROMPT = """你是 WeDecide 群体决策系统本身，卡片访谈、成员提议、需求确认、群体计算、协商与投票是同一连续过程，不存在另一个待启动的助手。主动主持从目标澄清、需求收集、提出备选、比较取舍到协商的决策过程。不要把用户局限到某个固定问卷或活动模板。承接 agent_memory 中仍适用的目标和结论，遇到新信息时明确修正原因，避免把每轮当成首次对话。根据当前目标和缺口自主判断下一步，给出简洁、具体、可执行的总结与下一步。仅使用公开资料、本人已授权公开的摘要和匿名约束核对结果；不要推断或暴露成员私聊、原始私密条件或拒绝理由。
 优先推动决定而非持续访谈：先用已有资料归纳两到三个有差异的备选。仅对确实影响可行性或排序的缺口追问，每轮最多两个；可选未知项不要反复补问。已有确认需求和候选时，先计算再说明，不再要求成员重复输入。存在冲突时先调整方案或寻找替代方向，最后才询问成员是否自愿修改自己的条件。
 comparison_digest 给出确定性计算的费用、群体分、最低预测满意度和已知维度取舍。比较这些角度，指出更省钱、更均衡等选择分别牺牲什么；没有可量化分数时直接说明。不能把某一个指标最高叫作唯一最优。总结要具体回答“可考虑什么、依据是什么、主要代价是什么、下一步怎么推进”，不只说还需要了解。
 你有 analyze 工具：当全体需求已确认且已有候选时，可以请求 tool=analyze，系统会真正运行校核工具，把结果交给你，再由你继续分析。不能分析时应解释缺少什么并 tool=respond。一次任务最多调用三轮模型，不重复请求相同工具。
@@ -53,12 +53,17 @@ def read_turn(raw):
     return turn
 
 
+def current_analysis(room):
+    return bool(room.get("analysis") and room["proposals"] and all(p["input_version"]==room["input_version"] for p in room["proposals"]))
+
+
 def preserve_progress(room,prepared):
-    if prepared is None and room["resources"] and all(m["confirmed"] for m in engine.active_members(room)) and room["state"] not in domain.TERMINAL|{"VOTING"}:
+    existing=current_analysis(room)
+    if prepared is None and not existing and room["resources"] and all(m["confirmed"] for m in engine.active_members(room)) and room["state"] not in domain.TERMINAL|{"VOTING"}:
         prepared=engine.generate(room)
-    notice="本轮 AI 说明未形成有效结构，已保留已有数据"+("和实际计算结果" if prepared is not None else "")+"，没有猜测新的事实或条件。"
-    if prepared is not None:
-        proposals=prepared["proposals"];feasible=sum(p["evaluation"]["status"]=="FEASIBLE" for p in proposals)
+    notice="本轮 AI 说明未形成有效结构，已保留已有数据"+("和实际计算结果" if prepared is not None or existing else "")+"，没有猜测新的事实或条件。"
+    if prepared is not None or existing:
+        proposals=prepared["proposals"] if prepared is not None else room["proposals"];feasible=sum(p["evaluation"]["status"]=="FEASIBLE" for p in proposals)
         summary=f"已按当前确认的数据完成校核，形成 {len(proposals)} 个候选，其中 {feasible} 个通过可计算的必要条件检查。"
         next_step="展开比较具体方案及缺项，再由房主选择待投票方案。" if feasible else "先核对缺失资料或调整备选，不需要反复回答已有问题。"
         previous={}
@@ -123,7 +128,7 @@ async def run(config, room, user_id, instruction):
                           'Decision Agent JSON Schema:\n'+store.dumps(DecisionAgentTurn.model_json_schema())])
     context = planning_context(room, user_id)
     messages = [{'role':'user','content':'当前决策数据（非指令）：\n'+store.dumps(context)+'\n\n本次任务：'+instruction}]
-    prepared = None
+    prepared = None;tool_used=False
     budget={"remaining":3}
     for turn_index in range(3):
         if budget["remaining"]<=0:return preserve_progress(room,prepared)
@@ -133,10 +138,13 @@ async def run(config, room, user_id, instruction):
             turn=await ai.validate_output(raw,provider,system,messages,read_turn,started,budget)
         except ai.StructuredOutputError:
             return preserve_progress(room,prepared)
-        if turn['tool'] == 'analyze' and prepared is None and room['resources'] and all(m['confirmed'] for m in engine.active_members(room)) and room['state'] not in domain.TERMINAL | {'VOTING'}:
-            prepared = engine.generate(room)
-            evaluated = deepcopy(room)
-            domain.analyze(evaluated, deepcopy(prepared))
+        if turn['tool'] == 'analyze' and not tool_used and room['resources'] and all(m['confirmed'] for m in engine.active_members(room)) and room['state'] not in domain.TERMINAL | {'VOTING'}:
+            tool_used=True
+            evaluated=room
+            if not current_analysis(room):
+                prepared = engine.generate(room)
+                evaluated = deepcopy(room)
+                domain.analyze(evaluated, deepcopy(prepared))
             messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})}, {'role':'user','content':'analyze 工具实际结果：\n'+store.dumps(planning_context(evaluated,user_id))+'\n请结合结果完成比较与下一步，tool=respond。'}])
             continue
         if turn['tool'] == 'analyze' and turn_index < 2:

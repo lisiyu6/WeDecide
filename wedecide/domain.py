@@ -42,7 +42,7 @@ def new_room(user_id, data, max_members):
     rules = data.rules.model_dump()
     rules["max_members"] = min(rules["max_members"], max_members)
     now = time.time()
-    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "agent": None, "knowledge":"", "knowledge_version":0, "context_version":1, "supplements":[], "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
+    room = {"id": new_id(), "code": "", "revision": 1, "state": "COLLECTING", "host_id": user_id, "created": now, "updated": now, "scenario": data.scenario.model_dump(), "rules": rules, "members": [new_member(user_id, data.username, "approved")], "agent": {"enabled": True}, "knowledge":"", "knowledge_version":0, "context_version":1, "supplements":[], "manual_plans": [], "resources": engine.demo_resources() if data.demo else [], "resource_version": 1, "input_version": 1, "analysis_version": 0, "analysis": None, "proposals": [], "history": [], "selected_id": None, "round": 0, "vote": None, "vote_history": [], "requests": [], "feedback": [], "events": [], "provider_id": "", "provider": None, "result": None, "share_token": new_id()}
     event(room, "created", "房间已创建，等待成员加入并确认各自需求")
     return room
 
