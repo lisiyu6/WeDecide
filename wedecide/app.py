@@ -368,7 +368,7 @@ async def queue_room_ai(room, uid, data):
             prepared = metadata.pop("_prepared_analysis", None)
             if data.kind == "agent":
                 stale = current["input_version"] != room["input_version"] or current.get("context_version",0)!=room.get("context_version",0) or current["round"]!=room["round"] or current["state"] in domain.TERMINAL | {"VOTING"}
-                if prepared is not None and not stale:
+                if prepared is not None and not stale and not agent.current_analysis(current):
                     domain.analyze(current, prepared)
                 current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "context_version":room.get("context_version",0), "round":room["round"], "updated":time.time()}
                 store.save_room(db, current)

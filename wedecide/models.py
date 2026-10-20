@@ -291,8 +291,20 @@ class ComparisonExplanation(Model):
         return self
 
 
+class DecisionSimulation(Model):
+    fairness: float | None = Field(default=None, ge=0, le=1)
+    plans: list[ManualPlan] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def actual_change(self):
+        if self.fairness is None and not self.plans:
+            raise ValueError("模拟需要公平性权重或替代行程")
+        return self
+
+
 class DecisionAgentTurn(Model):
-    tool: Literal["analyze", "respond"] = "respond"
+    tool: Literal["analyze", "simulate", "respond"] = "respond"
+    simulation: DecisionSimulation | None = None
     goal: str = Field(default="", max_length=1000)
     summary: str = Field(min_length=1, max_length=4000)
     next_step: str = Field(default="", max_length=1500)
@@ -303,6 +315,8 @@ class DecisionAgentTurn(Model):
 
     @model_validator(mode="after")
     def bounded_questions(self):
+        if self.tool=="simulate" and self.simulation is None:
+            raise ValueError("simulate 工具需要 simulation 参数")
         if any(len(question) > 1000 for question in self.questions):
             raise ValueError("待补信息过长")
         return self

@@ -12,6 +12,7 @@ from .interview_tools import dispatch_input_tools, input_tool_contract
 from .models import DateResolution, ComparisonExplanation, InterviewResult, Preference, Resource, Scenario, ScenarioDraft
 
 from .prompts import BASE_PROMPT, system_prompt
+from .decision_tools import interview_algorithm_context
 
 
 
@@ -338,45 +339,7 @@ def interview_policy(history,version,action,text):
     return {"asked":asked,"seen":seen,"limit":4,"reason":"user_finished" if finish else "question_limit" if asked>=4 else ""}
 
 
-def interview_algorithm_context(room,member,preference):
-    """Describe the actual engine inputs; choose no questions or answers here."""
-    current=preference or member.get("preference") or Preference().model_dump()
-    fields={
-        "budget_max":"本人费用上限，按人均费用上界检查必要条件",
-        "budget_target":"理想人均费用，参与费用满意度比较",
-        "cost_preference":"更低费用倾向，无具体金额也可参与相对费用比较",
-        "budget_weight":"费用偏好在本人满意度中的权重1至5",
-        "available_start":"活动可参加时间下界，检查必要时间窗口",
-        "available_end":"活动可参加时间上界，检查必要时间窗口",
-        "max_duration":"活动最长总时长，含等待与转场",
-        "preferred_start":"希望活动开始的时间，参与软偏好比较",
-        "preferred_end":"希望活动结束的时间，参与软偏好比较",
-        "time_weight":"活动时间偏好在本人满意度中的权重1至5",
-        "categories":"对实际候选类别的偏好0/50/100，活动按时长加权",
-        "activity_weight":"类别偏好在本人满意度中的权重1至5",
-        "excluded_categories":"本人明确禁止的候选类别，检查必要条件",
-        "allowed_locations":"本人明确允许的候选地点，按名称检查必要条件",
-        "criteria":"本人具体要求，与同名候选布尔属性核对；hard/soft、态度及权重决定可行性或满意度",
-    }
-    resources=room["resources"];members=[m for m in room["members"] if m["status"]=="approved"]
-    if resources and all(r.get("kind","activity")=="decision" for r in resources):
-        for key in ("available_start","available_end","max_duration","preferred_start","preferred_end","time_weight"):fields.pop(key)
-    names=list(dict.fromkeys([c["name"] for c in current.get("criteria",[])]+[key for r in resources for key in r.get("attributes",{})]))[:30]
-    axes=[{"name":name,"evidence":[{"resource_id":r["id"],"value":r.get("attributes",{}).get(name),"confirmed":r["confirmed"]} for r in resources]} for name in names]
-    gaps=[]
-    for resource in resources:
-        missing=[]
-        if not resource["confirmed"]:missing.append("候选事实尚未核对")
-        if resource["cost"] is None:missing.append("费用未知")
-        missing.extend(c["name"] for c in current.get("criteria",[]) if c.get("hard") and c["name"] not in resource.get("attributes",{}))
-        if missing:gaps.append({"resource_id":resource["id"],"needs_organizer_check":missing})
-    effects=[]
-    for proposal in room["proposals"]:
-        if proposal["input_version"]!=room["input_version"]:continue
-        evaluation=proposal["evaluation"];own=next((u for u in evaluation["utilities"] if u["member_id"]==member["id"]),{})
-        effects.append({"proposal_id":proposal["id"],"status":evaluation["status"],"my_dimensions":own.get("dimensions",[]),"my_violations":[v for v in evaluation["violations"] if v.get("member_id")==member["id"]]})
-    defaults=Preference().model_dump()
-    return {"objective":"先满足每位成员已确认的必要条件，再按(1-fairness)*平均预测满意度+fairness*最低预测满意度比较；正式共识只由投票决定。","fairness":room["rules"]["fairness"],"member_count":len(members),"supported_fields":fields,"known_fields":[key for key in fields if current.get(key,defaults[key])!=defaults[key]],"member_unresolved":current.get("unresolved",[]),"candidate_axes":axes,"candidate_categories":list(dict.fromkeys(r["category"] for r in resources)),"candidate_fact_gaps":gaps,"actual_effects":effects,"boundary":"只根据本人明确表达整理草稿。未表达的可选项无需补齐，不能由别人的偏好推断此人，也不能猜测价格或候选事实。"}
+
 
 
 def read_interview(answer,policy,algorithm=None):
@@ -428,6 +391,8 @@ async def complete(config, room, user_id, kind, text, draft=None, interview_acti
         context["group_progress"]={"member_count":len(members),"confirmed_count":sum(member["confirmed"] for member in members),"my_confirmed":me["confirmed"],"meaning":"当前是同一次群体决策；本次仅私密了解此成员，以便随后核对全体必要条件及公平性，不代表为个人单独推荐或已达成共识。"}
         context["decision_agent"]={key:room.get("agent",{}).get(key) for key in ("goal","summary","next_step") } if room.get("agent") else {}
         context.update(knowledge=room.get("knowledge",""),supplements=visible_supplements(room,user_id),calendar=calendar_context())
+        from .decision_tools import decision_progress
+        context["decision_progress"]=decision_progress(room)
     if room and kind == "explain":
         from .domain import view
         context["comparison"] = view(room, user_id)

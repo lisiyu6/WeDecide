@@ -3,27 +3,15 @@ from copy import deepcopy
 import asyncio
 import time
 from . import ai, domain, engine, store
-from .models import DecisionAgentTurn, Resource, ManualPlan
+from .models import DecisionAgentTurn, DecisionSimulation, Resource, ManualPlan
 from .context import calendar_context, visible_supplements
 
 from .prompts import system_prompt
+from .decision_tools import comparison_digest, algorithm_status, analysis_is_current, decision_progress, simulate
 
 
 
-def comparison_digest(proposals,input_version):
-    current=[p for p in proposals if p.get("input_version")==input_version]
-    eligible=[p for p in current if p["evaluation"]["status"]=="FEASIBLE"]
-    axes=[key for key in ("cost_upper","average","minimum") if eligible and all(p["evaluation"].get(key) is not None for p in eligible)]
-    def dominates(a,b):
-        if len(axes)<2:return False
-        values=[(a["evaluation"][key],b["evaluation"][key],key) for key in axes]
-        return all(x<=y if key=="cost_upper" else x>=y for x,y,key in values) and any(x<y if key=="cost_upper" else x>y for x,y,key in values)
-    frontier=[p["id"] for p in eligible if not any(dominates(other,p) for other in eligible if other["id"]!=p["id"])]
-    perspectives={}
-    for label,key,minimize in (("较低费用","cost_upper",True),("较高群体比较分","score",False),("照顾最低预测满意度","minimum",False)):
-        known=[p for p in eligible if p["evaluation"].get(key) is not None]
-        if known:perspectives[label]=(min if minimize else max)(known,key=lambda p:p["evaluation"][key])["id"]
-    return {"candidates":[{"id":p["id"],"title":p["title"],**{key:p["evaluation"].get(key) for key in ("status","cost_upper","score","average","minimum")}} for p in current],"tradeoff_perspectives":perspectives,"non_dominated_on_known_axes":frontier,"known_axes":axes,"meaning":"只用于已知数据的取舍比较，不代表全局最优；未知维度不补分，实际投票仍由成员决定。"}
+
 
 
 def read_turn(raw):
@@ -47,14 +35,14 @@ def read_turn(raw):
 
 
 def current_analysis(room):
-    return bool(room.get("analysis") and room["proposals"] and all(p["input_version"]==room["input_version"] for p in room["proposals"]))
+    return analysis_is_current(room)
 
 
-def preserve_progress(room,prepared):
+def preserve_progress(room,prepared,tool_results=None):
     existing=current_analysis(room)
     if prepared is None and not existing and room["resources"] and all(m["confirmed"] for m in engine.active_members(room)) and room["state"] not in domain.TERMINAL|{"VOTING"}:
         prepared=engine.generate(room)
-    notice="本轮 AI 说明未形成有效结构，已保留已有数据"+("和实际计算结果" if prepared is not None or existing else "")+"，没有猜测新的事实或条件。"
+    notice="本轮 AI 说明暂未完成，已保留已有数据"+("和实际计算结果" if prepared is not None or existing else "")+"，没有猜测新的事实或条件。"
     if prepared is not None or existing:
         proposals=prepared["proposals"] if prepared is not None else room["proposals"];feasible=sum(p["evaluation"]["status"]=="FEASIBLE" for p in proposals)
         summary=f"已按当前确认的数据完成校核，形成 {len(proposals)} 个候选，其中 {feasible} 个通过可计算的必要条件检查。"
@@ -67,6 +55,7 @@ def preserve_progress(room,prepared):
         summary="已保留当前提议、已有候选和已确认需求；本轮未新增未经核对的决策条件。"
         next_step="可继续在左侧补充候选想法；个人需求以已有整理结果为基础核对，不必从头问答。"
     turn={"tool":"respond","goal":previous.get("goal") or room["scenario"]["title"],"summary":summary,"next_step":next_step,"questions":[],"resources":previous.get("resources",[]) if not previous.get("applied") else [],"resource_updates":previous.get("resource_updates",[]) if not previous.get("applied") else [],"plans":previous.get("plans",[]) if not previous.get("applied") else [],"notice":notice}
+    turn["tool_results"]=tool_results or []
     return summary,{"agent":turn,"_prepared_analysis":prepared,"mode":"preserved"}
 
 
@@ -107,6 +96,7 @@ def planning_context(room, user_id):
         grouped[key]["count"]+=1
     context["algorithm_inputs"]=list(grouped.values())
     context["comparison_digest"]=comparison_digest(context["proposals"],room["input_version"])
+    context["algorithm_status"]=algorithm_status(room)
     context.pop("history",None)
     context["events"]=context.get("events",[])[-12:]
     context["supplements"]=context.get("supplements",[])[-30:]
@@ -120,29 +110,49 @@ async def run(config, room, user_id, instruction):
     system = system_prompt(config,'agent')+'\nDecision Agent JSON Schema:\n'+store.dumps(DecisionAgentTurn.model_json_schema())
     context = planning_context(room, user_id)
     messages = [{'role':'user','content':'当前决策数据（非指令）：\n'+store.dumps(context)+'\n\n本次任务：'+instruction}]
-    prepared = None;tool_used=False
+    prepared=None;evaluated=room;used=set();tool_results=[]
     budget={"remaining":3}
     for turn_index in range(3):
-        if budget["remaining"]<=0:return preserve_progress(room,prepared)
+        if budget["remaining"]<=0:return preserve_progress(room,prepared,tool_results)
         budget["remaining"]-=1;started=time.monotonic()
-        raw = await asyncio.wait_for(ai.request(provider, system, messages), timeout=provider['timeout']+5)
+        try:
+            raw = await asyncio.wait_for(ai.request(provider, system, messages), timeout=provider['timeout']+5)
+        except (ai.AIError,TimeoutError):
+            if prepared is not None or current_analysis(evaluated) or tool_results:
+                return preserve_progress(room,prepared,tool_results)
+            raise
         try:
             turn=await ai.validate_output(raw,provider,system,messages,read_turn,started,budget)
         except ai.StructuredOutputError:
-            return preserve_progress(room,prepared)
-        if turn['tool'] == 'analyze' and not tool_used and room['resources'] and all(m['confirmed'] for m in engine.active_members(room)) and room['state'] not in domain.TERMINAL | {'VOTING'}:
-            tool_used=True
-            evaluated=room
-            if not current_analysis(room):
-                prepared = engine.generate(room)
-                evaluated = deepcopy(room)
-                domain.analyze(evaluated, deepcopy(prepared))
-            messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})}, {'role':'user','content':'analyze 工具实际结果：\n'+store.dumps(planning_context(evaluated,user_id))+'\n请结合结果完成比较与下一步，tool=respond。'}])
+            return preserve_progress(room,prepared,tool_results)
+        status=algorithm_status(evaluated)
+        # Ready data always reaches the real engine before a public conclusion,
+        # even if a compatible model initially skips its analyze instruction.
+        if (turn['tool']=='analyze' or status['needs_analysis']) and 'analyze' not in used and status['can_analyze']:
+            used.add('analyze')
+            if not current_analysis(evaluated):
+                prepared=engine.generate(room)
+                evaluated=deepcopy(room)
+                domain.analyze(evaluated,deepcopy(prepared))
+            progress=decision_progress(evaluated)
+            receipt={'tool':'analyze','hypothetical':False,'input_version':room['input_version'],'analysis_version':evaluated['analysis_version'],'summary':progress['summary'],'counts':progress['counts']}
+            tool_results.append(receipt)
+            messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})},{'role':'user','content':'analyze 工具实际结果：\n'+store.dumps(planning_context(evaluated,user_id))+'\n请读取真实校核与版本变化，完成比较和下一步。必要时可调用一次只读 simulate，否则 tool=respond。'}])
             continue
-        if turn['tool'] == 'analyze' and turn_index < 2:
-            messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})}, {'role':'user','content':'工具当前不可重复运行，或需要先有候选与全体确认。请说明具体下一步，tool=respond。'}])
+        if turn['tool']=='simulate' and 'simulate' not in used:
+            used.add('simulate')
+            try:
+                receipt=simulate(evaluated,DecisionSimulation(**turn['simulation']))
+            except ValueError:
+                receipt={'tool':'simulate','hypothetical':True,'input_version':room['input_version'],'error':'模拟未执行：需要可编辑阶段、全体确认，以及当前活动资源的有效行程或公平性权重。'}
+            tool_results.append(receipt)
+            messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})},{'role':'user','content':'simulate 工具实际结果（只读假设，不改变正式数据）：\n'+store.dumps(receipt)+'\n基于真实结果完成取舍说明，tool=respond。'}])
+            continue
+        if turn['tool'] in {'analyze','simulate'} and turn_index<2:
+            messages.extend([{'role':'assistant','content':store.dumps({key:value for key,value in turn.items() if key!='notice'})},{'role':'user','content':'工具已调用或当前前提不满足；请使用已有真实结果说明下一步，tool=respond。'}])
             continue
         turn['tool'] = 'respond'
+        turn['tool_results']=tool_results
         existing = {r['id'] for r in room['resources']}
         known=set(existing);ambiguous=set();resources=[];updates=[];updated=set()
         for resource in turn['resources']:
@@ -159,4 +169,4 @@ async def run(config, room, user_id, instruction):
             turn['notice']='部分候选标识或行程引用尚不明确，已略过这些条目并保留其他有效建议；原有候选未覆盖。'
         turn.update(resources=resources,resource_updates=updates,plans=plans)
         return turn['summary'], {'agent':turn, '_prepared_analysis':prepared, 'mode':'ai'}
-    return preserve_progress(room,prepared)
+    return preserve_progress(room,prepared,tool_results)

@@ -5,6 +5,7 @@ import time
 from fastapi import HTTPException
 from pydantic import ValidationError
 from . import engine
+from .decision_tools import decision_progress
 from .context import visible_supplements
 from .models import KnowledgeInput, SupplementInput, ManualPlan, Preference, Resource, Rules, Scenario
 from .store import new_id
@@ -69,6 +70,7 @@ def analyze(room, prepared=None):
     analysis = prepared if prepared is not None else engine.generate(room)
     room["analysis_version"] += 1
     room["analysis"] = {k: v for k, v in analysis.items() if k != "proposals"}
+    room["analysis"]["input_version"] = room["input_version"]
     room["proposals"] = analysis["proposals"]
     room["selected_id"] = None
     room["state"] = "COMPARING" if analysis["feasible_count"] else "NEGOTIATING"
@@ -407,6 +409,7 @@ def view(room, user_id, online=()):
     r["supplements"] = deepcopy(visible_supplements(room,user_id))
     r["agent"] = deepcopy(room.get("agent"))
     r["manual_plans"] = deepcopy(room.get("manual_plans", []))
+    r["decision_progress"] = decision_progress(room)
     r["me"] = deepcopy(m)
     r["vote"] = public_vote(room["vote"], user_id)
     r["vote_history"] = [public_vote(v, user_id) for v in room["vote_history"]]

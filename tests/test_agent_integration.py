@@ -91,6 +91,58 @@ class AlgorithmAgentTests(unittest.TestCase):
         self.assertNotIn('75',json.dumps(progress,ensure_ascii=False))
         self.assertNotIn('budget_max',json.dumps(progress))
 
+    def test_agent_reads_analysis_then_simulation_before_its_final_explanation(self):
+        room=prepared_room();before=deepcopy(room)
+        answers=[{'tool':'analyze','summary':'先校核'},{'tool':'simulate','simulation':{'fairness':.8},'summary':'比较公平性取舍'},{'tool':'respond','summary':'已根据实际结果说明取舍'}]
+        request=AsyncMock(side_effect=[json.dumps(value) for value in answers])
+        with patch.object(ai,'resolve_provider',return_value={'timeout':5}),patch.object(ai,'request',request):
+            _,metadata=asyncio.run(agent.run({},room,'host','比较不同取舍'))
+        self.assertEqual(request.await_count,3)
+        self.assertEqual([r['tool'] for r in metadata['agent']['tool_results']],['analyze','simulate'])
+        self.assertTrue(metadata['agent']['tool_results'][1]['hypothetical'])
+        self.assertTrue(metadata['agent']['tool_results'][1]['candidates'])
+        self.assertIn('simulate 工具实际结果',request.call_args.args[2][-1]['content'])
+        self.assertEqual(room,before)
+
+    def test_upstream_failure_after_calculation_keeps_the_actual_result(self):
+        room=prepared_room();request=AsyncMock(side_effect=[json.dumps({'tool':'analyze','summary':'先校核'}),ai.AIError('上游暂时不可用')])
+        with patch.object(ai,'resolve_provider',return_value={'timeout':5}),patch.object(ai,'request',request):
+            _,metadata=asyncio.run(agent.run({},room,'host','推进'))
+        self.assertTrue(metadata['_prepared_analysis']['proposals'])
+        self.assertEqual(metadata['agent']['tool_results'][0]['tool'],'analyze')
+        self.assertEqual(metadata['mode'],'preserved')
+
+    def test_delayed_agent_does_not_replace_a_newly_computed_and_selected_formal_plan(self):
+        from wedecide.models import AIInput
+        async def run():
+            room=prepared_room();release=asyncio.Event();coordinator=ai.Coordinator()
+            async def delayed(*args):
+                prepared=engine.generate(room);await release.wait()
+                return '已校核',{'agent':{'summary':'已校核'},'_prepared_analysis':prepared}
+            with tempfile.TemporaryDirectory(prefix='wedecide-agent-') as directory,patch.object(store,'DATA_DIR',Path(directory)),patch.object(store,'DB_PATH',Path(directory)/'fixture.sqlite'),patch.object(app,'coordinator',coordinator),patch.object(app.agent,'run',side_effect=delayed):
+                store.init()
+                with store.transaction() as db:
+                    db.execute('INSERT INTO rooms VALUES(?,?,?,?,?,?)',(room['id'],room['code'],room['state'],room['revision'],room['updated'],store.dumps(room)))
+                await app.queue_room_ai(room,'host',AIInput(kind='agent',text='校核'))
+                await asyncio.sleep(0)
+                with store.transaction() as db:
+                    current=store.load_room(db,room['id']);domain.analyze(current);selected=current['proposals'][0]['id'];current['selected_id']=selected;store.save_room(db,current)
+                tasks=list(coordinator.pending.values());release.set();await asyncio.gather(*tasks)
+                with store.connect() as db:saved=store.load_room(db,room['id'])
+                self.assertEqual(saved['analysis_version'],1)
+                self.assertEqual(saved['selected_id'],selected)
+        asyncio.run(run())
+
+    def test_empty_bounded_search_is_a_completed_analysis_not_an_endless_compute_prompt(self):
+        room=prepared_room();room['resources']=[Resource(id='one',name='活动',cost=20,confirmed=True).model_dump()]
+        room['rules'].update(min_activities=2,max_activities=2)
+        domain.analyze(room)
+        from wedecide.decision_tools import algorithm_status
+        self.assertFalse(room['proposals'])
+        self.assertTrue(algorithm_status(room)['current_analysis'])
+        self.assertFalse(algorithm_status(room)['needs_analysis'])
+        self.assertEqual(domain.view(room,'host')['decision_progress']['stage'],'conflict')
+
     def test_question_context_distinguishes_candidate_evidence_from_member_questions(self):
         room=prepared_room();member=room['members'][0]
         room['resources'][0]['attributes']={'安静':True};room['resources'][1]['attributes']={'安静':False}
@@ -100,3 +152,24 @@ class AlgorithmAgentTests(unittest.TestCase):
         room['resources'][0]['confirmed']=False
         contract=ai.interview_algorithm_context(room,member,member['preference'])
         self.assertTrue(any(gap['scope']=='organizer' for gap in contract['decision_gaps']))
+
+
+class DecisionReadingTests(unittest.TestCase):
+    def test_comparison_explains_real_progress_and_keeps_simulation_separate(self):
+        import subprocess
+        room=prepared_room();domain.analyze(room)
+        room['resources'][0]['cost']=40;domain.invalidate(room,'核对费用')
+        visible=domain.view(room,'host')
+        visible['agent']={'input_version':room['input_version'],'context_version':room['context_version'],'summary':'已有两个共同方向','tool_results':[{'tool':'simulate','hypothetical':True,'fairness':.8,'input_version':room['input_version'],'summary':'只读比较','candidates':[]}]} 
+        script="""
+          import {comparisonPage} from './web/decision.js';
+          let input='';for await(const chunk of process.stdin)input+=chunk;
+          const room=JSON.parse(input);
+          console.log(comparisonPage({room,zen:true,messages:[],bootstrap:{}}));
+        """
+        result=subprocess.run(['node','--input-type=module','-e',script],input=json.dumps(visible),capture_output=True,text=True,cwd=Path(__file__).resolve().parents[1])
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(visible['decision_progress']['summary'],result.stdout)
+        self.assertIn('与第 1 版相比',result.stdout)
+        self.assertIn('只读模拟',result.stdout)
+        self.assertIn('正式规则',result.stdout)
