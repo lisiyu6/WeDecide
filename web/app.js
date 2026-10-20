@@ -1,3 +1,4 @@
+import {buildCreationScenario} from './creation.js';
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score} from './common.js';
 import {contextDrawer,mountContextDrawer,resolveDate} from './context.js';
 import {manualPlanForm} from './decision.js';
@@ -178,7 +179,7 @@ async function resolveFormDate(form){
  const answer=await resolveDate(form,room,()=>version===routeVersion);
  if(version!==routeVersion)return;
  state.dirtyForms.add(formId(form));
- if(formId(form)==='create-room'){state.creationDraft={...state.creationDraft,date_expression:form.elements.date_expression.value,scenario:readScenario(formData(form))};saveDraft('wd-create',state.creationDraft);}
+ if(formId(form)==='create-room'){state.creationDraft.date_expression=form.elements.date_expression.value;state.creationDraft.manual={...state.creationDraft.manual,date:answer.date};saveDraft('wd-create',state.creationDraft);}
  return answer;
 }
 async function resourceDialog(resource={}) {state.resourceRevision=state.room.revision;dialog(resource.id?'核对备选方案':'补充备选方案',resourceForm(resource));}
@@ -262,13 +263,21 @@ async function submit(form) {
    const room=await post(`/api/join/${encodeURIComponent(code)}`,{username:d.username});navigate(`/r/${room.code}`);break;
   }
   case 'scenario-ai':{
-   state.creationDraft.raw=d.text;saveDraft('wd-create',state.creationDraft);
-   const result=await post('/api/scenario',{text:d.text,kind:'scenario'});state.creationDraft={...state.creationDraft,...result};saveDraft('wd-create',state.creationDraft);state.dirtyForms.clear();render();toast(result.text);break;
+   const raw=d.text.trim(),version=routeVersion;
+   if(!raw)throw new Error('先说一下这次想决定什么。');
+   state.creationDraft.raw=raw;state.creationDraft.error='';saveDraft('wd-create',state.creationDraft);
+   try{
+    const result=await post('/api/scenario',{text:raw,kind:'scenario'});
+    if(version!==routeVersion)return;
+    if(state.creationDraft.raw.trim()!==raw){toast('描述已经修改，请按最新想法重新整理。');return;}
+    state.creationDraft={...state.creationDraft,...result,source:raw};saveDraft('wd-create',state.creationDraft);state.dirtyForms.clear();render(true);
+   }catch(error){if(version!==routeVersion)return;state.creationDraft.error=error.message+'。原话已保留，可以直接创建空间。';saveDraft('wd-create',state.creationDraft);render(true);}
+   break;
   }
   case 'create-room':{
    if(d.date_expression?.trim()&&form.elements.date.dataset.expression!==d.date_expression.trim()){const resolved=await resolveFormDate(form);if(!resolved)return;d.date=resolved.date;}
-   const room=await post('/api/rooms',{username:d.username,scenario:readScenario(d),rules:readRules(d),demo:form.elements.demo.checked});
-   if(state.creationDraft.resources?.length&&!form.elements.demo.checked){
+   const room=await post('/api/rooms',{username:d.username,scenario:buildCreationScenario(state.creationDraft),rules:readRules(d),demo:false});
+   if(state.creationDraft.resources?.length&&state.creationDraft.source===state.creationDraft.raw){
     try{await post(`/api/rooms/${room.id}/actions`,{revision:room.revision,action:'resources',payload:{resources:state.creationDraft.resources}});}catch(error){toast(`房间已创建，候选草稿未保存：${error.message}`,true);}
    }
    deleteDraft('wd-create');state.creationDraft={};navigate(`/r/${room.code}`);break;
@@ -354,10 +363,16 @@ document.addEventListener('input',event=>{
  else if(formId(form)==='chat-form'){state.chatRaw=form.elements.text.value;saveDraft(chatKey(),state.chatRaw);}
  else if(formId(form)==='vote-form'){state.voteSession??=state.room.vote.id;}
  else if(formId(form)==='fairness-sim'){state.simFairness=Number(event.target.value)/100;setText('#fairness-label',`${event.target.value}%`,form);}
- else if(formId(form)==='create-room'){const d=formData(form);state.creationDraft={...state.creationDraft,username:d.username,date_expression:d.date_expression||'',scenario:readScenario(d)};saveDraft('wd-create',state.creationDraft);}
+ else if(formId(form)==='create-room'){
+   const d=formData(form),name=event.target.name;
+   state.creationDraft.username=d.username;state.creationDraft.date_expression=d.date_expression||'';
+   state.creationDraft.settings={...state.creationDraft.settings,...Object.fromEntries(['max_members','threshold','fairness','max_rounds','vote_seconds'].map(key=>[key,d[key]]))};
+   if(['title','description','city','date','reference_budget'].includes(name))state.creationDraft.manual={...state.creationDraft.manual,[name]:d[name]};
+   saveDraft('wd-create',state.creationDraft);
+ }
  else if(formId(form)==='knowledge-form'){state.knowledgeDraft={text:form.elements.text.value,knowledge_version:Number(form.elements.knowledge_version.value)};saveDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`,state.knowledgeDraft);}
  else if(formId(form)==='supplement-form'){state.contextDraft=formData(form);saveDraft(`wd-context:${state.room.id}:${state.room.me.id}`,state.contextDraft);}
- else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;saveDraft('wd-create',state.creationDraft);}
+ else if(formId(form)==='scenario-ai'){state.creationDraft.raw=event.target.value;state.creationDraft.error='';const review=$('[data-scenario-review]');if(review)review.hidden=state.creationDraft.source!==state.creationDraft.raw;const feedback=$('[data-creation-feedback]');if(feedback)feedback.hidden=true;saveDraft('wd-create',state.creationDraft);}
 });
 document.addEventListener('change',event=>{
  const form=event.target.form;

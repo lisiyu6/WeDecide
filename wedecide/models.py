@@ -196,6 +196,11 @@ class Scenario(Model):
             date.fromisoformat(value)
         return value
 
+class ScenarioDraft(Model):
+    scenario: Scenario
+    resources: list[Resource] = Field(default_factory=list, max_length=20)
+
+
 class CreateRoom(Model):
     username: str = Field(min_length=1, max_length=30)
     scenario: Scenario
