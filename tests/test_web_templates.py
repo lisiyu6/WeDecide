@@ -171,5 +171,105 @@ class ZenFlowTemplateTests(unittest.TestCase):
         self.assertIn('退出禅模式',html['layout'])
 
 
+
+class DisclosureContent(HTMLParser):
+    """Read the default content of native disclosures, without relying on CSS."""
+    def __init__(self, html):
+        super().__init__()
+        self.closed = 0
+        self.summary = 0
+        self.text = []
+        self.feed(html)
+
+    def handle_starttag(self, tag, attrs):
+        attrs=dict(attrs)
+        if tag == 'details':
+            self.closed += 1
+        if tag == 'summary':
+            self.summary += 1
+
+    def handle_endtag(self, tag):
+        if tag == 'details':
+            self.closed -= 1
+        if tag == 'summary':
+            self.summary -= 1
+
+    def handle_data(self, data):
+        if not self.closed or self.summary:
+            self.text.append(data)
+
+    def visible(self):
+        return ' '.join(self.text)
+
+
+class FocusedJourneyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from wedecide import domain
+        from wedecide.models import CreateRoom,Preference,Resource
+        room=domain.new_room('host',CreateRoom(username='房主',scenario={'title':'统一体验'}),8)
+        room['members'][0].update(confirmed=True,preference=Preference().model_dump())
+        room['resources']=[Resource(id='a',kind='decision',name='已核对的选择',description='先讨论目标，再分工执行',cost=100,confirmed=True,source='核对依据全文').model_dump()]
+        domain.analyze(room)
+        room['selected_id']=room['proposals'][0]['id']
+        room['agent']={'summary':'Agent 的当前结论','next_step':'核对已选方案','goal':'共同决定','questions':['仍待澄清的背景全文'],'input_version':room['input_version'],'context_version':room['context_version'],'enabled':True}
+        room['events']=[{'at':1,'text':'历史事件全文','kind':'test'}]
+        negotiation=domain.view(room,'host')
+        negotiation['requests']=[{'id':'pending-1','status':'PENDING','field':'budget_max','before':100,'after':120,'reason':'可选调整说明','preference_version':1,'expires':2000000000},{'id':'past-1','status':'REJECTED','field':'budget_max','before':100,'after':150,'reason':'旧调整历史全文','preference_version':1,'expires':2000000000}]
+        negotiation['feedback']=[{'summary':'允许公开的摘要全文','version':1}]
+        domain.mutate(room,'host','start_vote',{},room['revision'],{})
+        voting=domain.view(room,'host')
+        voting['proposals'][0]['title']='后来出现的草稿标题'
+        domain.mutate(room,'host','vote',{'session_id':room['vote']['id'],'choice':'accept','reason':'私密理由全文'},room['revision'],{})
+        finished=domain.view(room,'host')
+        script="""
+          import {overview,negotiate,vote,result} from './web/room-views.js';
+          let raw='';for await(const chunk of process.stdin)raw+=chunk;
+          const [n,v,r]=JSON.parse(raw),base={zen:true,messages:[{id:1,role:'user',kind:'interview',content:'旧访谈原文',created:1,metadata:{}},{id:2,role:'assistant',kind:'negotiate',content:'继续讨论当前方案',created:2,metadata:{}}],bootstrap:{},chatMode:'private'};
+          console.log(JSON.stringify({overview:overview({...base,room:n}),negotiate:negotiate({...base,room:n}),vote:vote({...base,room:v}),result:result({...base,room:r})}));
+        """
+        output=subprocess.run(['node','--input-type=module','-e',script],input=json.dumps([negotiation,voting,finished]),cwd=ROOT,check=True,capture_output=True,text=True)
+        cls.pages=json.loads(output.stdout)
+
+    def test_overview_exposes_actual_selected_plan_and_folds_followup_questions(self):
+        html=self.pages['overview'];visible=DisclosureContent(html).visible()
+        self.assertIn('已核对的选择',visible)
+        self.assertIn('Agent 的当前结论',visible)
+        self.assertNotIn('仍待澄清的背景全文',visible)
+        self.assertIn('仍待澄清的背景全文',html)
+
+    def test_negotiation_prioritizes_pending_decisions_over_optional_forms_and_history(self):
+        html=self.pages['negotiate'];visible=DisclosureContent(html).visible()
+        self.assertIn('可选调整说明',visible)
+        self.assertIn('继续讨论当前方案',visible)
+        self.assertNotIn('旧访谈原文',html)
+        self.assertNotIn('旧调整历史全文',visible)
+        self.assertNotIn('允许公开的摘要全文',visible)
+        forms=[attrs.get('id') for tag,attrs in Elements(html).nodes if tag=='form']
+        self.assertEqual(forms.count('chat-form'),1)
+        self.assertEqual(forms.count('feedback-form'),1)
+        self.assertIn('data-id="pending-1"',html)
+        self.assertIn('旧调整历史全文',html)
+
+    def test_voting_uses_frozen_plan_and_one_real_ballot_with_optional_details_closed(self):
+        html=self.pages['vote'];visible=DisclosureContent(html).visible()
+        self.assertIn('已核对的选择',visible)
+        self.assertNotIn('后来出现的草稿标题',html)
+        self.assertNotIn('核对依据全文',visible)
+        elements=Elements(html)
+        self.assertEqual(len([x for tag,x in elements.nodes if tag=='form' and x.get('id')=='vote-form']),1)
+        self.assertEqual({x.get('value') for tag,x in elements.nodes if tag=='input' and x.get('name')=='choice'},{'accept','revise','reject'})
+        self.assertEqual(len(elements.matching('data-deadline')),1)
+
+    def test_result_leads_with_final_choice_and_keeps_records_and_participation_optional(self):
+        html=self.pages['result'];visible=DisclosureContent(html).visible()
+        self.assertIn('已核对的选择',visible)
+        self.assertIn('先讨论目标，再分工执行',visible)
+        self.assertNotIn('历史事件全文',visible)
+        self.assertNotIn('我的实际参与意愿',visible)
+        self.assertIn('历史事件全文',html)
+        self.assertIn('id="attendance-form"',html)
+        self.assertIn('/report',html)
+
 if __name__ == '__main__':
     unittest.main()

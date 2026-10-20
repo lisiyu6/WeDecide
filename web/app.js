@@ -42,6 +42,7 @@ function render(preserve=false) {
  const root=$('#app');
  const saved=preserve?captureInputs(root):null,contextScroll=preserve?$('#context-drawer .context-drawer-body',root)?.scrollTop:0;
  const expanded=preserve?$$('details[data-proposal-detail][open]',root).map(el=>el.dataset.proposalDetail):[];
+ const disclosures=preserve?$$('details[data-disclosure]',root).map(el=>({key:el.dataset.disclosure,open:el.open})):[];
  if(saved)saved.values=saved.values.filter(v=>state.dirtyForms.has(v.form)&&!(v.form==='preference-form'&&(terminal.has(state.room?.state)||state.room?.state==='VOTING')));
  if(state.route==='home')root.innerHTML=home(state.rooms,state.bootstrap);
  else if(state.route==='new')root.innerHTML=creation(state.bootstrap,state.creationDraft);
@@ -49,6 +50,7 @@ function render(preserve=false) {
  else if(state.route==='auth')root.innerHTML=accountPage(state.bootstrap,state.authMode,state.authNext);
  else if(state.route==='room')root.innerHTML=state.room.me.status==='approved'?layout(state)+contextDrawer(state):waiting(state.room);
  mountContextDrawer(root);
+ for(const savedDetail of disclosures){const detail=$$('details[data-disclosure]',root).find(el=>el.dataset.disclosure===savedDetail.key);if(detail)detail.open=savedDetail.open;}
  if(saved)restoreInputs(root,saved);
  const contextBody=$('#context-drawer .context-drawer-body',root);if(contextBody&&contextScroll)contextBody.scrollTop=contextScroll;
  for(const id of expanded){const detail=$$('details[data-proposal-detail]',root).find(el=>el.dataset.proposalDetail===id);if(detail)detail.open=true;}
