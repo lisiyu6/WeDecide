@@ -148,5 +148,28 @@ class ContinuousInputTemplateTests(unittest.TestCase):
         self.assertIn('name="date_expression"',html['create'])
 
 
+class ZenFlowTemplateTests(unittest.TestCase):
+    def test_zen_comparison_shows_one_option_and_keeps_reachable_navigation(self):
+        from wedecide import domain
+        from wedecide.models import CreateRoom,Preference,Resource
+        room=domain.new_room('host',CreateRoom(username='房主',scenario={'title':'禅模式'}),8)
+        room['members'][0].update(confirmed=True,preference=Preference().model_dump())
+        room['resources']=[Resource(id=str(i),kind='decision',name=f'备选{i}',confirmed=True).model_dump() for i in range(3)]
+        domain.analyze(room)
+        script="""
+          import {comparisonPage} from './web/decision.js';
+          import {layout} from './web/room-views.js';
+          let raw='';for await(const chunk of process.stdin)raw+=chunk;
+          const room=JSON.parse(raw),state={room,zen:true,messages:[],tab:'compare',bootstrap:{account:null,providers:[],limits:{max_members:8}}};
+          console.log(JSON.stringify({compare:comparisonPage(state),layout:layout(state)}));
+        """
+        result=subprocess.run(['node','--input-type=module','-e',script],input=json.dumps(domain.view(room,'host')),cwd=ROOT,check=True,capture_output=True,text=True)
+        html=json.loads(result.stdout)
+        self.assertEqual(len(Elements(html['compare']).matching('data-proposal-id')),1)
+        self.assertIn('下一个方案',html['compare'])
+        self.assertIn('data-focus-nav',html['layout'])
+        self.assertIn('退出禅模式',html['layout'])
+
+
 if __name__ == '__main__':
     unittest.main()
