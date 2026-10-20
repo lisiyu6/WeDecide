@@ -335,7 +335,7 @@ def shared_ai_key(room):
 
 async def maybe_advance_agent(room):
     report = room.get("agent") or {}
-    attempted=(report.get("attempted_input_version")==room["input_version"] and report.get("attempted_context_version",0)==room.get("context_version",0))
+    attempted=(report.get("attempted_input_version")==room["input_version"] and report.get("attempted_context_version",0)==room.get("context_version",0) and report.get("attempted_round",0)==room["round"])
     if report.get("enabled",True) is False or attempted or room["state"] in domain.TERMINAL | {"VOTING"}:
         return
     if shared_ai_key(room) in coordinator.pending or not ai.resolve_provider(store.settings(),room):
@@ -366,10 +366,10 @@ async def queue_room_ai(room, uid, data):
             content, metadata = (error, {"error": True}) if error else result
             prepared = metadata.pop("_prepared_analysis", None)
             if data.kind == "agent":
-                stale = current["input_version"] != room["input_version"] or current.get("context_version",0)!=room.get("context_version",0) or current["state"] in domain.TERMINAL | {"VOTING"}
+                stale = current["input_version"] != room["input_version"] or current.get("context_version",0)!=room.get("context_version",0) or current["round"]!=room["round"] or current["state"] in domain.TERMINAL | {"VOTING"}
                 if prepared is not None and not stale:
                     domain.analyze(current, prepared)
-                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "context_version":room.get("context_version",0), "updated":time.time()}
+                current["agent"] = {**(current.get("agent") or {}), **metadata.get("agent", {}), "enabled": (current.get("agent") or {}).get("enabled", True), "running": False, "applied": False if not error else (current.get("agent") or {}).get("applied", False), "error": error, "stale": stale, "input_version":room["input_version"], "context_version":room.get("context_version",0), "round":room["round"], "updated":time.time()}
                 store.save_room(db, current)
             metadata["request_id"] = data.request_id
             metadata["context_version"] = room.get("context_version",0)
@@ -383,7 +383,7 @@ async def queue_room_ai(room, uid, data):
         store.append_message(db, room["id"], uid, "user", data.kind, data.text, {"interview_action":data.interview_action,"preference_version":next(m["preference_version"] for m in room["members"] if m["id"]==uid)})
         current = get_room(db, room["id"])
         if data.kind == "agent":
-            current["agent"] = {**(current.get("agent") or {}), "enabled":(current.get("agent") or {}).get("enabled",True), "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
+            current["agent"] = {**(current.get("agent") or {}), "enabled":(current.get("agent") or {}).get("enabled",True), "running":True, "error":None, "attempted_input_version":room["input_version"],"attempted_context_version":room.get("context_version",0),"attempted_round":room["round"],"attempted_suggestion_id":next((item["id"] for item in reversed(room.get("supplements",[])) if item.get("kind")=="suggestion"),None)}
         store.save_room(db, current)
     hub.publish(room["id"])
     return {"queued": True}

@@ -29,6 +29,8 @@ class GroupJourneyTests(unittest.TestCase):
                 queue.reset_mock();await app.maybe_advance_agent(room);queue.assert_not_awaited()
                 room['context_version']+=1
                 await app.maybe_advance_agent(room);queue.assert_awaited_once()
+                queue.reset_mock();room['agent'].update(attempted_context_version=room['context_version']);room['round']=1;room['state']='NEGOTIATING';room['members'][0]['confirmed']=True
+                await app.maybe_advance_agent(room);queue.assert_awaited_once()
                 queue.reset_mock();room['state']='VOTING'
                 await app.maybe_advance_agent(room);queue.assert_not_awaited()
         asyncio.run(run())

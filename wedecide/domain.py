@@ -217,7 +217,7 @@ def mutate(room, user_id, action, payload, revision, limits):
         host(room, user_id)
         editable(room)
         report = room.get("agent")
-        require(report and report["input_version"] == room["input_version"] and report.get("context_version",0)==room.get("context_version",0), "Agent 草稿已过期，请让 Agent 继续后再采纳", 409)
+        require(report and report["input_version"] == room["input_version"] and report.get("context_version",0)==room.get("context_version",0) and report.get("round",room["round"])==room["round"], "共同备选草稿已过期，请让 Agent 继续后再采纳", 409)
         require(not report.get("running") and not report.get("error") and not report.get("stale"), "Agent 仍在处理或结果不可用，请继续后重试")
         require(not report.get("applied"), "这份 Agent 草稿已采纳", 409)
         additions = [Resource(**resource).model_dump() for resource in report.get("resources", [])]
@@ -348,6 +348,7 @@ def mutate(room, user_id, action, payload, revision, limits):
         require(proposal_id is None or any(p["id"] == proposal_id for p in room["proposals"]), "反馈方案版本已变化", 409)
         room["feedback"].append({"id": new_id(), "member_id": user_id, "text": text, "summary": summary, "proposal_id": proposal_id, "version": room["analysis_version"], "at": time.time()})
         room["feedback"] = room["feedback"][-100:]
+        if summary:room["context_version"]=room.get("context_version",0)+1
         event(room, "feedback", "收到一条方案反馈")
     elif action == "finish":
         host(room, user_id)
