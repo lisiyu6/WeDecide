@@ -278,7 +278,7 @@ def generate(room):
     chosen.sort(key=rank_key)
     for index, proposal in enumerate(chosen):
         proposal.update(id=new_id(), code=str(index+1) if index>=26 else chr(65 + index), version=room["analysis_version"] + 1, input_version=room["input_version"])
-    scope = f"通用备选独立比较；活动工具支持单城市单日，最少 {rules.get('min_activities', 1)}、最多 {rules['max_activities']} 项活动；每层最多 2000 个时间安排、保留 48 条路径，另评价房主自定义行程。有限搜索不保证全局最优。"
+    scope = (f"活动行程按单城市单日、最少 {rules.get('min_activities', 1)}、最多 {rules['max_activities']} 项进行有限搜索，并核对自定义行程；通用备选独立比较。未覆盖的安排可继续交由 Agent 提议，不保证全局最优。" if resources else "按已确认的必要条件独立核对通用备选；偏好缺少事实依据时保留为未知，不补造分数。")
     return {"proposals": chosen, "considered": considered, "resource_combinations": combinations, "scope": scope, "bounded": bounded, "warnings": warnings, "feasible_count": feasible_count}
 
 

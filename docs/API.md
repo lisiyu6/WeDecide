@@ -34,6 +34,9 @@
 | `approve` / `reject_join` | `member_id` | 房主；投票中不得改变名单 |
 | `preference` | `preference_version`, `preference` | 本人；未澄清项须解决；投票或结束后锁定 |
 | `resources` | `resources` 列表 | 房主；最多 20 项 |
+| `plans` | `plans` 列表 | 房主；最多六份自定义活动行程，每份最多五项，引用当前活动资源 |
+| `agent_draft` | 空 | 房主；仅采纳当前有效且未采纳的 Agent 草稿，新事实仍待核对 |
+| `agent_toggle` | `enabled` 布尔值 | 房主；停止/恢复后续自动推进，已开始的请求可完成 |
 | `settings` | `scenario`, `rules` | 房主；正式投票开始后冻结规则 |
 | `analyze` | 空 | 房主；全员已确认且有候选资源 |
 | `select` | `proposal_id` | 房主；必须当前输入版本且可行 |
@@ -56,14 +59,26 @@
 | --- | --- | --- |
 | GET | `/api/rooms/{id}/messages?before={message_id}` | 每页最多 50 条；仅本人私聊与公开消息 |
 | POST | `/api/rooms/{id}/messages` | `{"text":"...","kind":"chat"}`，发布公开消息 |
-| POST | `/api/rooms/{id}/ai` | `{"text":"...","kind":"chat|preferences|negotiate"}`；202 后通过 SSE 获取结果 |
+| POST | `/api/rooms/{id}/ai` | `{"text":"...","kind":"chat|preferences|negotiate|interview|explain|agent"}`；202 后通过 SSE 获取结果 |
 | POST | `/api/scenario` | 生成创建页面的场景草稿，使用默认全局供应商 |
 | GET / PUT | `/api/rooms/{id}/provider` | 仅房主；读取脱敏配置 / 保存全局选择或房间专用接口 |
 | POST | `/api/rooms/{id}/provider/models` | 仅房主；`{}` 使用已保存接口，`{provider}` 按未保存的表单拉取，或 `{provider_id}` 查看所选全局接口 |
 
 房间 API 的保存格式为 `{revision, provider_id, provider}`；`provider=null` 表示回到全局配置。Provider 模型集中定义了 endpoint、protocol、model、api_key、auth_header、auth_prefix、headers、extra_body、request_template、response_path、models_endpoint、models_path、model_id_field、timeout、max_tokens、temperature、enabled。
 
-AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化草稿。草稿永远不直接写入正式条件。异步结果保留生成时的偏好版本；用户提交旧草稿需要先按当前版本重新核对。
+AI 请求按 kind 使用同一套供应商选择、并发和消息隔离机制：
+
+- `interview`：可带当前 `draft`（Preference）及 `request_id`。结果 metadata 包含 `interview`（question、left、right、summary、insights、ready）和 `draft`；不确认成员、不改变正式偏好。题目由模型动态生成。
+- `explain`：metadata.explanation 包含 summary、reasons、risks、next_steps，依据本人上下文与当前方案解释取舍，仅本人可见。
+- `agent`：仅房主可以主动调用。模型根据公开状态自主响应或请求 analyze 工具，单轮最多三次模型请求。实际工具结果返回模型继续分析，当前输入版本仍有效且不在投票/结束时才安装分析结果。房间快照 `agent` 提供共享总结、下一步和待采纳草稿，`agent_pending` 表示是否在执行。
+
+启动 Agent 后，成员确认与候选变化可按新 input_version 自动推进；每个版本只自动尝试一次，失败由用户重试。正式投票与结束期间不自动推进。Agent 连续目标保存在房间 `agent` 报告中，不依赖浏览器常驻。
+
+草稿永远不替成员确认正式条件。异步结果带生成时的 input_version、preference_version 和 request_id；旧草稿须重新核对。Agent 的内部 `_prepared_analysis` 不进入消息响应。
+
+Preference.criteria 支持最多十二项动态要求：`{name, rating:0|50|100, weight:1..5, hard:boolean, scope:any|all}`，rating=50 的中立态度不可设为必要条件。Resource.attributes 是同名事实布尔值，缺失表示未知。Resource.kind 为 activity（活动）或 decision（通用备选）；通用备选允许不填城市和日期，evaluation.start/end 为 null。具体模型见 models.py。
+
+供应商优先使用房间专用配置，其次房间选择的全局供应商，再其次管理员默认值。密钥仅后端使用，新增 Agent 不改变原接口或另设密钥。
 
 ## 管理员
 
@@ -87,7 +102,7 @@ AI 回复只有两类结果：聊天文本，或消息 metadata 中的结构化�
 
 ## 实现依据
 
-实时输出、生命周期和第三方 HTTP 调用采用库的标准接口；以下资料用于源码实现时核对 API，本次未据此宣称已经完成运行验证：
+实时输出、生命周期和第三方 HTTP 调用采用库的标准接口；以下为实现参考，实际功能验证记录见 TESTING.md：
 
 - [FastAPI 响应与 StreamingResponse](https://fastapi.tiangolo.com/advanced/custom-response/)
 - [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/)

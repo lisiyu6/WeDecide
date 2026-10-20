@@ -71,7 +71,7 @@ def analyze(room, prepared=None):
     room["proposals"] = analysis["proposals"]
     room["selected_id"] = None
     room["state"] = "COMPARING" if analysis["feasible_count"] else "NEGOTIATING"
-    event(room, "analysis", f"完成第 {room['analysis_version']} 版全体评价，当前搜索范围内有 {analysis['feasible_count']} 个可行时间安排")
+    event(room, "analysis", f"完成第 {room['analysis_version']} 版全体评价，当前搜索范围内有 {analysis['feasible_count']} 个符合已确认必要条件的方案")
 
 
 def finish_vote(room):
@@ -190,7 +190,7 @@ def mutate(room, user_id, action, payload, revision, limits):
         require(len({r["id"] for r in resources}) == len(resources), "候选活动 ID 重复")
         room["resources"] = resources
         room["resource_version"] += 1
-        invalidate(room, "房主更新候选活动，所有方案按新数据重新评价")
+        invalidate(room, "房主更新备选方案，所有方案按新数据重新评价")
     elif action == "agent_toggle":
         host(room, user_id)
         require(isinstance(payload.get("enabled"), bool), "请选择是否自动推进")
