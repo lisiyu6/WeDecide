@@ -239,6 +239,10 @@ async def room_action(key: str, data: Mutation, request: Request):
     with store.transaction() as db:
         room = get_room(db, key)
         domain.mutate(room, uid, data.action, data.payload, data.revision, store.settings(db))
+        if data.action in {'preference','agent_draft','resources','plans','answer_request'}:
+            status=agent.algorithm_status(room)
+            if status['needs_analysis']:
+                domain.analyze(room)
         store.save_room(db, room)
     hub.publish(room["id"])
     await maybe_process_supplements(room)

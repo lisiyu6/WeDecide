@@ -13,6 +13,27 @@ def question(text='更想安静聊天还是热闹一点？'):
     return {'ready':False,'targets':['criteria'],'purpose':'用于比较方案与具体偏好的匹配。','question':text,'left':'安静聊天','right':'热闹一点','summary':'已了解目前的偏好。','draft':{'budget_max':200}}
 
 class InterviewProgressTests(unittest.TestCase):
+    def test_equivalent_history_envelope_is_accepted_without_another_model_call(self):
+        value=question();draft=value.pop('draft')
+        result=ai.read_interview(json.dumps({'interview':value,'draft':draft}),{'reason':'','seen':[]})
+        self.assertEqual(result['question'],value['question'])
+        self.assertEqual(result['draft']['budget_max'],200)
+
+    def test_ending_an_unanswered_optional_card_does_not_create_a_new_blocker(self):
+        pending='安静交谈对你来说是必须满足的条件，还是只是加分项？'
+        history=[{'role':'user','kind':'interview','content':'我希望实惠一点，有人均预算上限。','metadata':{'preference_version':0,'interview_action':'answer'}},{'role':'assistant','kind':'interview','content':pending,'metadata':{'preference_version':0,'interview':question(pending)}},{'role':'user','kind':'interview','content':'请先把已有回答整合成需求表','metadata':{'preference_version':0,'interview_action':'finish'}}]
+        result={'ready':True,'draft':{'budget_max':80,'unresolved':['安静交谈是必须满足的条件还是加分项，尚未确认。']}}
+        (_,metadata),_=self.complete(history,[result],interview_action='finish')
+        self.assertEqual(metadata['draft']['budget_max'],80)
+        self.assertFalse(metadata['draft']['unresolved'])
+        self.assertFalse(metadata['draft']['notes'])
+
+    def test_ending_never_waives_a_members_explicit_necessary_condition(self):
+        history=[{'role':'user','kind':'interview','content':'我必须在安静的地方用餐，但多安静还没想清楚。','metadata':{'preference_version':0,'interview_action':'answer'}},{'role':'assistant','kind':'interview','content':'问题','metadata':{'preference_version':0,'interview':question('安静交谈是必须满足的条件，还是只是加分项？')}}]
+        pending='安静交谈是必须满足的条件，尚未明确。'
+        (_,metadata),_=self.complete(history,[{'ready':True,'draft':{'unresolved':[pending]}}],interview_action='finish')
+        self.assertEqual(metadata['draft']['unresolved'],[pending])
+
     def complete(self,history,answers,**options):
         current=room();request=AsyncMock(side_effect=[json.dumps(x,ensure_ascii=False) if isinstance(x,dict) else x for x in answers])
         with patch.object(ai,'resolve_provider',return_value={'timeout':5}),patch.object(ai,'request',request),patch.object(ai.store,'messages',return_value=history):

@@ -51,6 +51,22 @@ class PromptPresetTests(unittest.TestCase):
 
 
 class AlgorithmAgentTests(unittest.TestCase):
+    def test_last_confirmation_returns_actual_comparison_without_waiting_for_a_model(self):
+        async def run():
+            room=prepared_room();room['code']='INSTANT1'
+            room['members'].append(domain.new_member('peer','伙伴','approved'))
+            with tempfile.TemporaryDirectory(prefix='wedecide-instant-') as directory,patch.object(store,'DATA_DIR',Path(directory)),patch.object(store,'DB_PATH',Path(directory)/'fixture.sqlite'),patch.object(app,'authenticated',return_value='peer'):
+                store.init()
+                with store.transaction() as db:
+                    db.execute('INSERT INTO rooms VALUES(?,?,?,?,?,?)',(room['id'],room['code'],room['state'],room['revision'],room['updated'],store.dumps(room)))
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app.app),base_url='http://fixture') as client:
+                    response=await client.post('/api/rooms/INSTANT1/actions',json={'revision':room['revision'],'action':'preference','payload':{'preference':{'budget_max':80},'preference_version':0}})
+                self.assertEqual(response.status_code,200,response.text)
+                saved=response.json()
+                self.assertTrue(saved['decision_progress']['current'])
+                self.assertEqual(saved['decision_progress']['counts']['FEASIBLE'],1)
+        asyncio.run(run())
+
     def test_synthesis_receipts_only_reference_public_inputs_actually_read(self):
         room=prepared_room()
         room['supplements']=[{'id':'public-1','kind':'suggestion','visibility':'shared','member_id':'host','title':'方向建议','text':'考虑方向甲','at':1},{'id':'private-1','kind':'information','visibility':'private','member_id':'host','title':'私密','text':'私人原话','at':2}]

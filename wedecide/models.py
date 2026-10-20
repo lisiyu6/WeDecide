@@ -24,7 +24,7 @@ class Provider(Model):
     request_template: dict = Field(default_factory=dict)
     response_path: str = Field(default="choices.0.message.content", max_length=200)
     timeout: int = Field(default=60, ge=5, le=180)
-    max_tokens: int = Field(default=2048, ge=128, le=8192)
+    max_tokens: int = Field(default=4096, ge=128, le=8192)
     temperature: float = Field(default=0.5, ge=0, le=2)
     enabled: bool = True
 

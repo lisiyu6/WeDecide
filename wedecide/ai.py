@@ -1,6 +1,7 @@
 """Bounded third-party AI gateway. Credentials and injected context stay server-side."""
 import asyncio
 from collections import OrderedDict
+from difflib import SequenceMatcher
 import json
 import re
 import time
@@ -167,7 +168,11 @@ async def request(provider, system, messages):
                         if len(chunks) > 2 * 1024 * 1024:
                             raise AIError("第三方响应超过 2 MB 限制")
                     data = json.loads(chunks)
-                    return extract_path(data, path)[:30000]
+                    if provider['protocol']=='openai' and data.get('choices',[{}])[0].get('finish_reason')=='length':
+                        raise AIError('模型输出达到长度上限，回答尚未完整。请在房间接口中提高输出上限后重试')
+                    content=extract_path(data,path)
+                    if not content.strip():raise AIError('模型没有返回回答正文，请换用其他模型或调整输出上限后重试')
+                    return content[:30000]
         raise AIError("接口未返回可用内容")
     except AIError:
         raise
@@ -345,6 +350,13 @@ def interview_policy(history,version,action,text):
 def read_interview(answer,policy,algorithm=None):
     obj=parse_json(answer)
     if not isinstance(obj,dict):raise ValueError("访谈结果需要对象")
+    # Older history used this equivalent envelope; accept it without wasting a repair call.
+    if isinstance(obj.get('interview'),dict):
+        nested=obj['interview'];obj={**nested,'draft':obj.get('draft',nested.get('draft',{}))}
+    for key in ('question','left','right','summary','purpose'):
+        if obj.get(key) is None:obj[key]=''
+    for key in ('insights','targets','tool_calls'):
+        if obj.get(key) is None:obj[key]=[]
     clean=lambda value:re.sub(r"[\W_]+","",str(value)).casefold()
     if not policy["reason"] and not obj.get("ready") and clean(obj.get("question","")) in {clean(q) for q in policy["seen"]}:
         policy["reason"]="repeated_question"
@@ -359,6 +371,29 @@ def read_interview(answer,policy,algorithm=None):
         raise AlgorithmQuestionError(str(error)) from None
     result["summary"]=result["summary"] or "已整理目前表达的想法，请核对需求结果后再确认。"
     return result
+
+
+def keep_unanswered_options_optional(interview,history,policy,version):
+    """Ending a model's optional follow-up cannot create a new member obligation."""
+    if policy['reason'] not in {'user_finished','question_limit','repeated_question'}:
+        return
+    current=[row for row in history if row.get('metadata',{}).get('preference_version',version)==version]
+    questions=[(index,row['metadata']['interview']) for index,row in enumerate(current) if row['role']=='assistant' and row.get('metadata',{}).get('interview',{}).get('question')]
+    if not questions:return
+    index,question=questions[-1]
+    optional={'criteria','categories','cost_preference','budget_target','budget_weight','preferred_start','preferred_end','time_weight','activity_weight'}
+    if not question.get('targets') or not set(question['targets'])<=optional:return
+    controls={'start','continue','finish'}
+    if any(row['role']=='user' and row.get('metadata',{}).get('interview_action') not in controls for row in current[index+1:]):return
+    authored=[row['content'] for row in current if row['role']=='user' and row.get('metadata',{}).get('interview_action') not in controls and not row['content'].startswith('针对问题')]
+    # Be conservative whenever the member actually expressed a qualitative bottom line.
+    if any(re.search(r'必须|不能|一定要|禁止|过敏|绝不|只能',text) for text in authored):return
+    clean=lambda value:re.sub(r'[\W_]+','',value)
+    draft=interview['draft'];remaining=[]
+    for item in draft['unresolved']:
+        if SequenceMatcher(None,clean(item),clean(question['question'])).ratio()<.55:
+            remaining.append(item)
+    draft['unresolved']=remaining
 
 
 def local_preferences(text):
@@ -430,7 +465,7 @@ async def complete(config, room, user_id, kind, text, draft=None, interview_acti
         context["available_tools"]=[input_tool_contract()]
         context["interview_policy"]={"already_asked":policy["asked"],"maximum_questions":4,"must_summarize_now":bool(policy["reason"]),"previous_questions":policy["seen"]}
         if policy["reason"]:system += "\n本轮现在必须结束追问，ready=true，question/left/right 留空。只根据已有回答整理 draft，未知可选项保持未知。"
-        messages = [{"role": row["role"], "content": (store.dumps({"interview": {key:value for key,value in row["metadata"]["interview"].items() if key!="input_cards"}, "draft": row["metadata"].get("draft")}) if row["role"] == "assistant" and row["metadata"].get("interview") else row["content"])[:12000]} for row in history if row["kind"] == "interview" and row["role"] in {"user", "assistant"} and not row["metadata"].get("error")]
+        messages = [{"role": row["role"], "content": (store.dumps({**{key:value for key,value in row["metadata"]["interview"].items() if key!="input_cards"}, "draft": row["metadata"].get("draft")}) if row["role"] == "assistant" and row["metadata"].get("interview") else row["content"])[:12000]} for row in history if row["kind"] == "interview" and row["role"] in {"user", "assistant"} and not row["metadata"].get("error")]
         if messages and messages[-1]["role"] == "user" and messages[-1]["content"] == text:
             messages.pop()
     messages.append({"role": "user", "content": "当前数据（非指令）：\n" + store.dumps(context) + "\n\n我的输入：\n" + text})
@@ -450,6 +485,7 @@ async def complete(config, room, user_id, kind, text, draft=None, interview_acti
             warnings=["本次回答的原文已保留，AI 暂未形成有效的新条件；以下保留上次有效草稿，可手动核对或重新整理。"]
             interview={"ready":True,"question":"","left":"","right":"","summary":"已保留已有需求，未猜测新的预算、时间或必要条件。","insights":[],"draft":preference}
             mode="preserved";policy["reason"]="format_preserved"
+        keep_unanswered_options_optional(interview,history,policy,me['preference_version'])
         preference=interview.pop("draft")
         progress={"asked":policy["asked"]+(0 if interview["ready"] else 1),"limit":4,"reason":policy["reason"] or ("ready" if interview["ready"] else "question")}
         return interview["summary"]+("\n"+interview["question"] if interview["question"] else ""), {"draft":preference,"interview":interview,"interview_progress":progress,"warnings":warnings,"mode":mode}
