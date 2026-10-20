@@ -1,27 +1,51 @@
-/* A card fan opens from either screen edge into one quiet writing surface. */
+/* Resting side cards sit below the main content; the active card uses the dialog top layer. */
 body.context-open{overflow:hidden}
-body.has-context-wings{--wing-peek:max(28px,calc((100vw - 1160px)/2));--wing-top:clamp(150px,19dvh,220px);--wing-height:min(740px,76dvh);--wing-width:calc(var(--wing-peek) + 220px);background:var(--surface-soft)}
-.has-context-wings .workspace.focus-layout{position:relative;z-index:1;width:calc(100% - var(--wing-peek)*2);max-width:1160px;margin:12px auto;min-height:calc(100dvh - 24px);border:1px solid var(--line);border-radius:24px;box-shadow:0 18px 70px #1c352713;overflow:clip}
-.has-context-wings .focus-topbar{padding-inline:24px}
-.context-wings{position:fixed;inset:0;z-index:2;pointer-events:none;overflow:clip}
-.context-wing-paper{position:absolute;top:var(--wing-top);width:var(--wing-width);height:var(--wing-height);border:1px solid var(--line);border-radius:36px;background:var(--paper);box-shadow:0 12px 40px #172e2417;transform-origin:50% 100%;transition:opacity .2s}
-.context-wing-left{left:-220px;transform:rotate(2.5deg);background:var(--sage)}
-.context-wing-right{right:-220px;transform:rotate(-2.5deg)}
-.context-edge{position:fixed;top:var(--wing-top);z-index:35;width:calc(var(--wing-peek) + 14px);height:var(--wing-height);padding:0;border:0;background:transparent;color:var(--green);touch-action:none;cursor:grab;-webkit-tap-highlight-color:transparent}
-.context-edge-left{left:0}.context-edge-right{right:0}
-.context-edge-arrow{position:absolute;top:calc(50dvh - var(--wing-top));width:18px;height:34px;background:currentColor;opacity:.85;transition:transform .2s,opacity .2s;transform:translateY(-50%)}
-.context-edge-left .context-edge-arrow{left:calc(var(--wing-peek) - 4px);clip-path:polygon(0 0,100% 50%,0 100%)}
-.context-edge-right .context-edge-arrow{right:calc(var(--wing-peek) - 4px);clip-path:polygon(100% 0,0 50%,100% 100%)}
-.context-edge:hover .context-edge-arrow,.context-edge:focus-visible .context-edge-arrow{opacity:1;transform:translateY(-50%) scale(1.12)}
-.context-edge:focus-visible{outline:2px solid var(--green);outline-offset:-4px;border-radius:18px}
-.context-edge-label{position:absolute;top:24px;writing-mode:vertical-rl;text-orientation:upright;letter-spacing:.16em;line-height:1.5;font-size:15px;font-weight:500;color:var(--green);pointer-events:none}
-.context-edge-left .context-edge-label{left:calc(var(--wing-peek) - 24px)}.context-edge-right .context-edge-label{right:calc(var(--wing-peek) - 24px)}
+body.has-context-wings{
+ --wing-peek:clamp(24px,2.4vw,40px);
+ --wing-reveal:clamp(24px,calc((100vw - 1040px)/2),140px);
+ --wing-origin:max(0px,calc(50vw - 660px));
+}
+.has-context-wings #app{isolation:isolate}
+.has-context-wings :is(.focus-content,.room-content){position:relative;width:calc(100% - var(--wing-peek)*2)}
+.has-context-wings .focus-content>:not(#room-view),.has-context-wings #room-view>*{position:relative;z-index:2}
+.has-context-wings .focus-preferences #room-view>.pref-editor{z-index:auto}
+.has-context-wings .focus-preferences :is(.pref-process-guide,.interview-deck,.interview-compose,.preference-result,.interface-required,.notice){position:relative;z-index:2}
+.has-context-wings :is(.focus-topbar,.topbar){position:relative;z-index:3}
+.has-context-wings .room-content{z-index:22}
+.has-context-wings .topbar{z-index:23}
+.workspace:not(.focus-layout)~.context-edges{z-index:21}
+.has-context-wings .interview-deck{isolation:isolate}
+.has-context-wings .interview-deck:before{z-index:-1;transform:rotate(-1.25deg);opacity:.65}
+.has-context-wings .interview-question{z-index:1}
+.context-edges{position:fixed;inset:0;z-index:1;overflow:clip;pointer-events:none}
+.context-edge{
+ position:absolute;top:var(--context-rest-top,300px);
+ width:300px;height:var(--context-rest-height,340px);padding:0;
+ border:1px solid color-mix(in srgb,var(--line),var(--green) 8%);border-radius:25px;
+ background:linear-gradient(145deg,var(--paper),var(--surface-soft));color:var(--green);
+ box-shadow:0 16px 38px #172e2410,inset 0 1px 0 #ffffff18;
+ pointer-events:auto;touch-action:none;cursor:grab;-webkit-tap-highlight-color:transparent;
+ transition:transform .28s cubic-bezier(.2,.7,.2,1),box-shadow .28s,opacity .2s;
+}
+.context-edge:before{content:'';position:absolute;inset:12px;border:1px solid color-mix(in srgb,var(--line),transparent 30%);border-radius:16px;pointer-events:none}
+.context-edge-left{left:calc(var(--wing-origin) - 220px + var(--wing-reveal));transform:rotate(-6deg);transform-origin:right 64px;background:linear-gradient(145deg,var(--sage),var(--paper))}
+.context-edge-right{right:calc(var(--wing-origin) - 220px + var(--wing-reveal));transform:rotate(6deg);transform-origin:left 64px}
+.context-edge-left:hover,.context-edge-left:focus-visible{transform:translateX(7px) rotate(-4deg)}
+.context-edge-right:hover,.context-edge-right:focus-visible{transform:translateX(-7px) rotate(4deg)}
+.context-edge:hover,.context-edge:focus-visible{box-shadow:0 20px 48px #172e2420}
+.context-edge:focus-visible{outline:2px solid var(--green);outline-offset:-6px}
+.context-edge-icon,.context-edge-label,.context-edge-count{position:absolute;pointer-events:none}
+.context-edge-icon{top:33px;width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--line);border-radius:50%;background:color-mix(in srgb,var(--paper),transparent 45%)}
+.context-edge-label{top:95px;writing-mode:vertical-rl;text-orientation:upright;letter-spacing:.2em;line-height:1.6;font-size:19px;font-weight:550;color:var(--ink)}
+.context-edge-count{bottom:34px;display:grid;gap:1px;text-align:center;color:var(--muted)}
+.context-edge-count strong{font-size:23px;font-weight:500;line-height:1.3;font-variant-numeric:tabular-nums}.context-edge-count small{font-size:11px}
+.context-edge-left :is(.context-edge-icon,.context-edge-label,.context-edge-count){right:calc(76px + var(--wing-reveal)/2);transform:translateX(50%)}
+.context-edge-right :is(.context-edge-icon,.context-edge-label,.context-edge-count){left:calc(76px + var(--wing-reveal)/2);transform:translateX(-50%)}
 .context-open .context-edge{opacity:0;pointer-events:none}
-.context-open[data-context-side=left] .context-wing-left,.context-open[data-context-side=right] .context-wing-right{opacity:0}
 .context-deck{position:fixed;inset:50% auto auto 50%;margin:0;padding:0;width:min(660px,calc(100vw - 84px));max-width:none;max-height:none;overflow:visible;border:0;background:transparent;color:var(--ink);transform:translate(-50%,-50%);box-shadow:none}
 .context-deck::backdrop{background:#14251d55;backdrop-filter:blur(2px);animation:context-shade-in .25s ease-out}
 [data-theme="dark"] .context-deck::backdrop{background:#03090799}
-.context-fan-stack{position:relative;isolation:isolate;transform-origin:50% 85%;will-change:transform,opacity}
+.context-fan-stack{position:relative;isolation:isolate;transform-origin:center;will-change:transform,opacity}
 .context-sheet{position:relative;display:flex;flex-direction:column;min-height:300px;max-height:min(760px,calc(var(--context-viewport,100dvh) - 96px));border:1px solid var(--line);border-radius:26px;background:var(--paper);box-shadow:0 28px 90px #12291c38;overflow:hidden}
 .context-sheet-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:23px 28px 18px;touch-action:pan-y;cursor:grab;user-select:none}
 .context-sheet-header h2{font-size:26px;font-weight:550;line-height:1.45;margin:0}
@@ -53,6 +77,7 @@ body.has-context-wings{--wing-peek:max(28px,calc((100vw - 1160px)/2));--wing-top
 .context-prose{font-size:16px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
 .context-meta{font-size:13px;color:var(--muted);margin-top:14px}
 @keyframes context-shade-in{from{background:transparent}to{background:#14251d55}}
+@media(max-width:1200px){.context-edge-icon,.context-edge-count{display:none}.context-edge-label{font-size:15px}}
 @media(max-width:700px){
  .context-deck{width:calc(100vw - 44px)}
  .context-sheet{border-radius:22px}
@@ -62,13 +87,18 @@ body.has-context-wings{--wing-peek:max(28px,calc((100vw - 1160px)/2));--wing-top
  .context-card-body{padding:5px 20px 23px}.context-card-body form{gap:17px}
  .context-card-body textarea{min-height:140px}
  .context-tabs{padding:0 20px 15px;gap:7px}.context-tabs .button{font-size:14px;padding-inline:12px}
- .context-wing-left{transform:rotate(1.4deg)}.context-wing-right{transform:rotate(-1.4deg)}
- .context-edge-arrow{width:16px;height:31px}.context-edge-label{font-size:13px;top:24px}
- .has-context-wings .workspace.focus-layout{margin-block:7px;border-radius:21px;min-height:calc(100dvh - 14px)}
- .has-context-wings .focus-topbar{padding-inline:15px}.has-context-wings .focus-content{padding-inline:18px}
- .has-context-wings .workspace-heading{flex-wrap:wrap;gap:12px}.has-context-wings .workspace-heading h1{white-space:nowrap;font-size:24px}.has-context-wings .workspace-heading>.actions{margin-left:auto}
+ body.has-context-wings{--wing-peek:24px}
+ .context-edge{height:calc(var(--context-rest-height,340px) - 32px);border-radius:22px;box-shadow:0 8px 20px #172e2410}
+ .context-edge-left,.context-edge-left:hover,.context-edge-left:focus-visible{transform:rotate(-.8deg)}
+ .context-edge-right,.context-edge-right:hover,.context-edge-right:focus-visible{transform:rotate(.8deg)}
+ .context-edge:before,.context-edge-icon,.context-edge-count{display:none}
+ .context-edge-label{font-size:12px;top:26px}
+ .context-edge-left .context-edge-label{right:calc(72px + var(--wing-reveal)/2)}
+ .context-edge-right .context-edge-label{left:calc(72px + var(--wing-reveal)/2)}
+ .has-context-wings :is(.focus-content,.room-content){width:calc(100% - 48px);padding-inline:0}
+ .has-context-wings .workspace-heading{flex-wrap:wrap;gap:12px}.has-context-wings .workspace-heading h1{min-width:0;overflow-wrap:anywhere}.has-context-wings .workspace-heading>.actions{margin-left:auto}
  .context-card{padding:17px}
 }
 @media(max-height:540px){.context-sheet{max-height:calc(var(--context-viewport,100dvh) - 24px)}.context-sheet-header{padding-block:12px}.context-card-body textarea{min-height:96px}}
-@media(prefers-reduced-motion:reduce){.context-deck::backdrop{animation:none}.context-wing-paper,.context-edge-arrow{transition:none}}
-@media print{.context-edge,.context-wings,.context-deck{display:none!important}.has-context-wings .workspace.focus-layout{width:100%;margin:0;border:0;box-shadow:none}}
+@media(prefers-reduced-motion:reduce){.context-deck::backdrop{animation:none}.context-edge{transition:none}}
+@media print{.context-edges,.context-deck{display:none!important}.has-context-wings :is(.focus-content,.room-content){width:100%}}

@@ -1,16 +1,38 @@
 /* The two edge cards share one focused writing surface and pointer lifecycle. */
 let gesture=null,ignoreClickUntil=0,installed=false,dismissing=null;
+let edgeObserver=null,edgeFrame=0,restingOrigin=null;
 const motions=new WeakMap();
 const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
 const deck=()=>document.getElementById('context-drawer');
 const stack=()=>deck()?.querySelector('.context-fan-stack');
 const direction=side=>side==='left'?-1:1;
 const centered={transform:'translate3d(0,0,0) rotate(0deg) scale(1)',opacity:1};
+const edgeAnchor=(root=document)=>[...root.querySelectorAll('.interview-deck,.preference-result,.synthesis-card,.next-task')].find(node=>node.getBoundingClientRect().height>0);
+
+function positionEdges(){
+ edgeFrame=0;
+ const edges=document.querySelector('.context-edges');if(!edges)return;
+ const anchor=edgeAnchor();
+ const rect=anchor?.getBoundingClientRect();
+ const height=Math.min(Math.max(280,(rect?.height||320)+16),560,Math.max(160,innerHeight-144));
+ const top=Math.min(Math.max(112,(rect?.top??innerHeight*.32)+8),Math.max(112,innerHeight-height-24));
+ edges.style.setProperty('--context-rest-top',`${top}px`);
+ edges.style.setProperty('--context-rest-height',`${height}px`);
+}
+function scheduleEdges(){if(!edgeFrame)edgeFrame=requestAnimationFrame(positionEdges);}
+export function mountContextEdges(root){
+ edgeObserver?.disconnect();
+ if(!root.querySelector('.context-edges'))return;
+ const anchor=edgeAnchor(root);
+ if(anchor){edgeObserver??=new ResizeObserver(scheduleEdges);edgeObserver.observe(anchor);}
+ positionEdges();
+}
 
 function edgePose(side,progress=0){
  const distance=(innerWidth+Math.min(660,innerWidth-44))/2+40;
  const remaining=1-Math.max(0,Math.min(1,progress)),sign=direction(side);
- return {transform:`translate3d(${sign*distance*remaining}px,${32*remaining}px,0) rotate(${sign*18*remaining}deg) scale(${1-.08*remaining})`,opacity:Math.min(1,.3+progress)};
+ const origin=restingOrigin?.side===side?restingOrigin:{x:sign*distance,y:32,rotation:sign*18,scale:.92};
+ return {transform:`translate3d(${origin.x*remaining}px,${origin.y*remaining}px,0) rotate(${origin.rotation*remaining}deg) scale(${1-(1-origin.scale)*remaining})`,opacity:Math.min(1,.7+progress*.3)};
 }
 function paint(node,pose){node.style.transform=pose.transform;node.style.opacity=pose.opacity;}
 function animate(node,to,duration=400,from=null){
@@ -31,6 +53,13 @@ function sizeDeck(){
 }
 export function mountContextMotion(node,{restored=false}={}){
  sizeDeck();
+ const edge=document.querySelector(`[data-context-edge="${node.dataset.side}"]`);
+ if(edge&&!restored){
+  const rect=edge.getBoundingClientRect(),matrix=new DOMMatrix(getComputedStyle(edge).transform);
+  const width=Math.min(660,innerWidth-(innerWidth<=700?44:84));
+  const viewport=window.visualViewport;
+  restingOrigin={side:node.dataset.side,x:rect.left+rect.width/2-innerWidth/2,y:rect.top+rect.height/2-(viewport?.offsetTop||0)-(viewport?.height||innerHeight)/2,rotation:Math.atan2(matrix.b,matrix.a)*180/Math.PI,scale:Math.min(1,edge.offsetWidth/width)};
+ }
  const surface=node.querySelector('.context-fan-stack');
  if(gesture?.opening){node.classList.add('is-dragging');paint(surface,edgePose(gesture.side,0));}
  else if(!restored)void animate(surface,centered,460,edgePose(node.dataset.side,0));
@@ -47,6 +76,8 @@ export async function dismissContextCard(){
 export function installContextGestures({isAvailable,onOpen,onClose}){
  if(installed)return;installed=true;
  window.addEventListener('resize',sizeDeck);
+ window.addEventListener('resize',scheduleEdges);
+ window.addEventListener('scroll',scheduleEdges,{passive:true});
  window.visualViewport?.addEventListener('resize',sizeDeck);
  window.visualViewport?.addEventListener('scroll',sizeDeck);
  document.addEventListener('click',event=>{
