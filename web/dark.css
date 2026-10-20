@@ -1,7 +1,7 @@
 :root[data-theme="dark"]{--bg:#141b18;--paper:#1c2621;--ink:#e1e9e2;--muted:#a3b1a7;--line:#35453b;--green:#91c7a8;--sage:#283b2f;--lime:#344d39;--warm:#dfb584;--warm-bg:#382f23;--red:#e6a294;--shadow:0 12px 42px #0002;color-scheme:dark}
 [data-theme="dark"] body{background:var(--bg);color:var(--ink)}
 [data-theme="dark"] :is(.focus-layout,.workspace,.sidebar){background:var(--bg)}
-[data-theme="dark"] :is(.focus-topbar,.topbar,.stepper,.context-drawer,.tab-pills){background:#18221c;border-color:var(--line)}
+[data-theme="dark"] :is(.focus-topbar,.topbar,.stepper,.tab-pills){background:#18221c;border-color:var(--line)}
 [data-theme="dark"] :is(input,textarea,select,.copy-input){background:var(--paper);color:var(--ink);border-color:var(--line)}
 [data-theme="dark"] :is(input,textarea)::placeholder{color:#899a8e}
 [data-theme="dark"] :is(.field,.check,.advanced summary,.breadcrumbs,.breadcrumbs strong,.room-code,.nav-item,.typing,.proposal-data,.schedule-item strong,.countdown,.request-values,.list-clean,.connection,.proposal-index,.message-meta){color:var(--muted)}
@@ -16,7 +16,7 @@
 [data-theme="dark"] :is(.notice.warm,.heat.low,.heat.mid,.badge.warm){background:var(--warm-bg);border-color:#5b4b34;color:#e0bf91}
 [data-theme="dark"] :is(.notice.error,.message.error,.toast.error){background:#3c2925;border-color:#68443b;color:#edb2a5}
 [data-theme="dark"] :is(.nav-item.active,.nav-item:hover,.nav-item .count,.vote-option:has(input:checked)){background:#2e4736;border-color:#739b7e;color:#c5e8cd}
-[data-theme="dark"] :is(.home-features,.orbit-note,.request-card,.interview-question,.interview-compose form,.context-card,.needs-table,.toast,.pref-progress,.pref-footer,.summary-preview){background:var(--paper);border-color:var(--line);color:var(--ink)}
+[data-theme="dark"] :is(.home-features,.orbit-note,.request-card,.interview-question,.interview-compose form,.needs-table,.toast,.pref-progress,.pref-footer,.summary-preview){background:var(--paper);border-color:var(--line);color:var(--ink)}
 [data-theme="dark"] :is(.message,.message.assistant){background:#233027}
 [data-theme="dark"] .message.user{background:#2c4132}
 [data-theme="dark"] :is(.sidebar-help strong,.proposal-score strong,.home-hero h1 em){color:var(--green)}
@@ -26,7 +26,6 @@
 [data-theme="dark"] .interview-question.choose-left{background:#273b30;border-color:#86ac95}
 [data-theme="dark"] .interview-question.choose-right{background:#304a36;border-color:#9ccaa7}
 [data-theme="dark"] .interview-stamp{background:var(--paper);color:var(--green)}
-[data-theme="dark"] .context-drawer::backdrop{background:#0008}
 [data-theme="dark"] :is(code,pre,.code-preview){background:#131b16;color:#d3e3d6;border-color:var(--line)}
 [data-theme="dark"] .table-wrap :is(th,td){border-color:var(--line)}
 [data-theme="dark"] .model-option:hover{background:#2b3e31}

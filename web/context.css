@@ -1,0 +1,74 @@
+/* A card fan opens from either screen edge into one quiet writing surface. */
+body.context-open{overflow:hidden}
+body.has-context-wings{--wing-peek:max(28px,calc((100vw - 1160px)/2));--wing-top:clamp(150px,19dvh,220px);--wing-height:min(740px,76dvh);--wing-width:calc(var(--wing-peek) + 220px);background:var(--surface-soft)}
+.has-context-wings .workspace.focus-layout{position:relative;z-index:1;width:calc(100% - var(--wing-peek)*2);max-width:1160px;margin:12px auto;min-height:calc(100dvh - 24px);border:1px solid var(--line);border-radius:24px;box-shadow:0 18px 70px #1c352713;overflow:clip}
+.has-context-wings .focus-topbar{padding-inline:24px}
+.context-wings{position:fixed;inset:0;z-index:2;pointer-events:none;overflow:clip}
+.context-wing-paper{position:absolute;top:var(--wing-top);width:var(--wing-width);height:var(--wing-height);border:1px solid var(--line);border-radius:36px;background:var(--paper);box-shadow:0 12px 40px #172e2417;transform-origin:50% 100%;transition:opacity .2s}
+.context-wing-left{left:-220px;transform:rotate(2.5deg);background:var(--sage)}
+.context-wing-right{right:-220px;transform:rotate(-2.5deg)}
+.context-edge{position:fixed;top:var(--wing-top);z-index:35;width:calc(var(--wing-peek) + 14px);height:var(--wing-height);padding:0;border:0;background:transparent;color:var(--green);touch-action:none;cursor:grab;-webkit-tap-highlight-color:transparent}
+.context-edge-left{left:0}.context-edge-right{right:0}
+.context-edge-arrow{position:absolute;top:calc(50dvh - var(--wing-top));width:18px;height:34px;background:currentColor;opacity:.85;transition:transform .2s,opacity .2s;transform:translateY(-50%)}
+.context-edge-left .context-edge-arrow{left:calc(var(--wing-peek) - 4px);clip-path:polygon(0 0,100% 50%,0 100%)}
+.context-edge-right .context-edge-arrow{right:calc(var(--wing-peek) - 4px);clip-path:polygon(100% 0,0 50%,100% 100%)}
+.context-edge:hover .context-edge-arrow,.context-edge:focus-visible .context-edge-arrow{opacity:1;transform:translateY(-50%) scale(1.12)}
+.context-edge:focus-visible{outline:2px solid var(--green);outline-offset:-4px;border-radius:18px}
+.context-edge-label{position:absolute;top:24px;writing-mode:vertical-rl;text-orientation:upright;letter-spacing:.16em;line-height:1.5;font-size:15px;font-weight:500;color:var(--green);pointer-events:none}
+.context-edge-left .context-edge-label{left:calc(var(--wing-peek) - 24px)}.context-edge-right .context-edge-label{right:calc(var(--wing-peek) - 24px)}
+.context-open .context-edge{opacity:0;pointer-events:none}
+.context-open[data-context-side=left] .context-wing-left,.context-open[data-context-side=right] .context-wing-right{opacity:0}
+.context-deck{position:fixed;inset:50% auto auto 50%;margin:0;padding:0;width:min(660px,calc(100vw - 84px));max-width:none;max-height:none;overflow:visible;border:0;background:transparent;color:var(--ink);transform:translate(-50%,-50%);box-shadow:none}
+.context-deck::backdrop{background:#14251d55;backdrop-filter:blur(2px);animation:context-shade-in .25s ease-out}
+[data-theme="dark"] .context-deck::backdrop{background:#03090799}
+.context-fan-stack{position:relative;isolation:isolate;transform-origin:50% 85%;will-change:transform,opacity}
+.context-sheet{position:relative;display:flex;flex-direction:column;min-height:300px;max-height:min(760px,calc(var(--context-viewport,100dvh) - 96px));border:1px solid var(--line);border-radius:26px;background:var(--paper);box-shadow:0 28px 90px #12291c38;overflow:hidden}
+.context-sheet-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:23px 28px 18px;touch-action:pan-y;cursor:grab;user-select:none}
+.context-sheet-header h2{font-size:26px;font-weight:550;line-height:1.45;margin:0}
+.context-sheet-title{display:flex;align-items:center;gap:12px}
+.context-sheet-title>svg{color:var(--green)}
+.context-sheet-grip{width:30px;height:4px;border-radius:4px;background:var(--line);margin-left:auto;margin-right:7px}
+.context-deck.is-dragging .context-sheet-header{cursor:grabbing}
+.context-tabs{display:flex;gap:8px;flex-shrink:0;padding:0 28px 17px;border-bottom:1px solid var(--line)}
+.context-tabs .button{min-height:40px;font-size:14px;padding:7px 13px}
+.context-card-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:5px 28px 28px;scrollbar-width:thin}
+.context-card-body .field{font-size:14px;gap:8px}
+.context-card-body .field :is(input,textarea,select){font-size:16px}
+.context-card-body textarea{min-height:160px;line-height:1.85;resize:vertical}
+.context-card-body form{gap:20px}
+.context-card-body form>.button{min-height:50px;width:100%}
+.context-card-feedback{display:flex;align-items:center;gap:10px;padding:13px 15px;margin:0 0 18px;border-radius:12px;background:var(--sage);font-size:14px;line-height:1.7;overflow-wrap:anywhere}
+.context-card-feedback[hidden]{display:none}.context-card-feedback.has-error{color:var(--red);background:var(--warm-bg)}
+.context-card-feedback>button{margin-left:auto;background:none;border:0;color:inherit;font:inherit;white-space:nowrap;min-height:36px}
+.context-optional{font-size:14px;color:var(--muted)}
+.context-optional>summary{cursor:pointer;min-height:36px;line-height:1.8;padding:5px 0}
+.context-optional[open] .field{margin-top:10px}
+.context-history{margin-top:25px;padding-top:12px;border-top:1px solid var(--line)}
+.context-history>summary{min-height:44px;padding:8px 0;font-size:14px;color:var(--muted);cursor:pointer}
+.context-card-list{display:grid;gap:14px;margin-top:12px}
+.context-card{padding:19px;border:1px solid var(--line);border-radius:16px;background:var(--surface-soft)}
+.context-card .between{gap:12px;align-items:flex-start;flex-wrap:wrap}
+.context-card strong{min-width:0;overflow-wrap:anywhere}
+.context-card .badge{flex-shrink:0}.context-card .button{margin-top:12px}
+.context-prose{font-size:16px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
+.context-meta{font-size:13px;color:var(--muted);margin-top:14px}
+@keyframes context-shade-in{from{background:transparent}to{background:#14251d55}}
+@media(max-width:700px){
+ .context-deck{width:calc(100vw - 44px)}
+ .context-sheet{border-radius:22px}
+ .context-sheet{max-height:calc(var(--context-viewport,100dvh) - 60px);min-height:0}
+ .context-sheet-header{padding:20px 20px 15px;gap:10px}.context-sheet-header h2{font-size:24px}
+ .context-sheet-title{gap:10px}.context-sheet-grip{width:22px;margin-right:0}
+ .context-card-body{padding:5px 20px 23px}.context-card-body form{gap:17px}
+ .context-card-body textarea{min-height:140px}
+ .context-tabs{padding:0 20px 15px;gap:7px}.context-tabs .button{font-size:14px;padding-inline:12px}
+ .context-wing-left{transform:rotate(1.4deg)}.context-wing-right{transform:rotate(-1.4deg)}
+ .context-edge-arrow{width:16px;height:31px}.context-edge-label{font-size:13px;top:24px}
+ .has-context-wings .workspace.focus-layout{margin-block:7px;border-radius:21px;min-height:calc(100dvh - 14px)}
+ .has-context-wings .focus-topbar{padding-inline:15px}.has-context-wings .focus-content{padding-inline:18px}
+ .has-context-wings .workspace-heading{flex-wrap:wrap;gap:12px}.has-context-wings .workspace-heading h1{white-space:nowrap;font-size:24px}.has-context-wings .workspace-heading>.actions{margin-left:auto}
+ .context-card{padding:17px}
+}
+@media(max-height:540px){.context-sheet{max-height:calc(var(--context-viewport,100dvh) - 24px)}.context-sheet-header{padding-block:12px}.context-card-body textarea{min-height:96px}}
+@media(prefers-reduced-motion:reduce){.context-deck::backdrop{animation:none}.context-wing-paper,.context-edge-arrow{transition:none}}
+@media print{.context-edge,.context-wings,.context-deck{display:none!important}.has-context-wings .workspace.focus-layout{width:100%;margin:0;border:0;box-shadow:none}}

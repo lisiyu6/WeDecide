@@ -11,7 +11,9 @@ function buttonsFor(item){
 }
 
 function paint(){
- const root=document.getElementById('action-feedback');
+ const global=document.getElementById('action-feedback'),local=document.querySelector('[data-context-feedback]');
+ const root=local||global;
+ if(local&&global)global.hidden=true;
  if(!root)return;
  const latest=[...requests.values()].at(-1);
  root.hidden=!latest&&!failure;

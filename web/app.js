@@ -4,6 +4,7 @@ import {withFeedback,syncFeedback,actionMessages,formMessages} from './feedback.
 import {buildCreationScenario} from './creation.js';
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score,themeControl} from './common.js';
 import {contextDrawer,mountContextDrawer,resolveDate} from './context.js';
+import {dismissContextCard,installContextGestures} from './context-motion.js';
 import {manualPlanForm,agentReviewForm} from './decision.js';
 import {home,creation,joinPage,waiting,accountPage} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
@@ -47,7 +48,7 @@ function accountNext(value='/'){try{const url=new URL(value,location.origin);ret
 function showAccount(next,mode=null){state.route='auth';state.room=null;state.authNext=accountNext(next);state.authMode=mode||(state.bootstrap.has_legacy_rooms?'register':'login');render();}
 function render(preserve=false) {
  const root=$('#app');
- const saved=preserve?captureInputs(root):null,contextScroll=preserve?$('#context-drawer .context-drawer-body',root)?.scrollTop:0;
+ const saved=preserve?captureInputs(root):null,contextScroll=preserve?$('#context-drawer .context-card-body',root)?.scrollTop:0;
  const expanded=preserve?$$('details[data-proposal-detail][open]',root).map(el=>el.dataset.proposalDetail):[];
  const disclosures=preserve?$$('details[data-disclosure]',root).map(el=>({key:el.dataset.disclosure,open:el.open})):[];
  if(saved)saved.values=saved.values.filter(v=>(v.form!=='interview-value-form'||Boolean(currentInterviewInput(state)))&&state.dirtyForms.has(v.form)&&!(v.form==='preference-form'&&(terminal.has(state.room?.state)||state.room?.state==='VOTING')));
@@ -59,7 +60,7 @@ function render(preserve=false) {
  mountContextDrawer(root);
  for(const savedDetail of disclosures){const detail=$$('details[data-disclosure]',root).find(el=>el.dataset.disclosure===savedDetail.key);if(detail)detail.open=savedDetail.open;}
  if(saved)restoreInputs(root,saved);
- const contextBody=$('#context-drawer .context-drawer-body',root);if(contextBody&&contextScroll)contextBody.scrollTop=contextScroll;
+ const contextBody=$('#context-drawer .context-card-body',root);if(contextBody&&contextScroll)contextBody.scrollTop=contextScroll;
  for(const id of expanded){const detail=$$('details[data-proposal-detail]',root).find(el=>el.dataset.proposalDetail===id);if(detail)detail.open=true;}
  const roomView=state.route==='room'&&state.room?.me.status==='approved'?$('#room-view',root):null;
  if(roomView&&state.tab==='settings')renderProviderModels(roomView);
@@ -230,11 +231,11 @@ const handlers={
  'zen':()=>{state.zen=!state.zen;saveDraft('wd-zen',state.zen);render(true);},
  'focus-members':()=>{const r=state.room;dialog('伙伴与加入申请',`<div class="stack">${r.members.map(member=>`<div class="member-row"><div><strong>${esc(member.name)}</strong><p class="hint">${member.status==='pending'?'等待你批准':member.confirmed?'已确认个人需求':'正在独立表达'}</p></div>${member.status==='pending'?`<div class="actions"><button class="button secondary small" data-action="approve" data-id="${esc(member.id)}">同意加入</button><button class="button ghost small" data-action="reject_join" data-id="${esc(member.id)}">拒绝</button></div>`:''}</div>`).join('')}</div>`);},
  'focus-proposal':el=>{state.focusProposal=el.dataset.id;render(true);},
- 'context-open':()=>{state.contextOpen=true;state.contextSide='right';render(true);},
+ 'context-open':()=>{state.contextOpen=true;state.contextSide='right';state.contextTab='supplements';render(true);},
  'knowledge-open':()=>{state.contextOpen=true;state.contextSide='right';state.contextTab='knowledge';render(true);},
  'suggestions-open':()=>{state.contextOpen=true;state.contextSide='left';render(true);},
  'organize-suggestions':async()=>{await queueAI({kind:'agent',text:'请先整合大家在左侧卡片公开提交的提议，合并相似方向，说明差异和资料缺口，提出可核对的候选草稿。未全员确认需求时先整理，不要伪造校核结果。'});await refresh(true);},
- 'context-close':()=>{state.contextOpen=false;render(true);$(state.contextSide==='left'?'[data-action="suggestions-open"]':'[data-action="context-open"]')?.focus();},
+ 'context-close':async()=>{const room=state.room?.id,side=state.contextSide;await dismissContextCard();if(room!==state.room?.id||side!==state.contextSide)return;state.contextOpen=false;render(true);$(side==='left'?'[data-context-edge="left"]':'[data-context-edge="right"]')?.focus();},
  'context-tab':el=>{state.contextTab=el.dataset.tab;render(true);},
  'knowledge-discard':async()=>{state.knowledgeDraft=null;deleteDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`);state.dirtyForms.delete('knowledge-form');await refresh(true);render(true);},
  'context-to-preferences':()=>navigate(`/r/${state.room.code}?view=preferences&stage=result`),
@@ -443,19 +444,11 @@ document.addEventListener('change',event=>{
 document.addEventListener('toggle',event=>{if(event.target.id==='preference-ai')state.prefAiOpen=event.target.open;},true);
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.menu)handlers.menu();});
 document.addEventListener('cancel',event=>{if(event.target.id==='context-drawer'){event.preventDefault();handlers['context-close']();}},true);
-let contextSwipe=null;
-document.addEventListener('pointerdown',event=>{
- if(event.button!==0||event.target.closest('input,textarea,select,button,a,[data-interview-card]'))return;
- if(state.route!=='room'||state.room?.me.status!=='approved')return;
- const close=state.contextOpen,side=close?state.contextSide:event.clientX<=24?'left':event.clientX>=innerWidth-24?'right':null;
- if(side&&(!close||event.target.closest('[data-context-handle]')))contextSwipe={x:event.clientX,y:event.clientY,close,side};
+installContextGestures({
+ isAvailable:()=>state.route==='room'&&state.room?.me.status==='approved'&&!(terminal.has(state.room.state)&&state.tab==='result'),
+ onOpen:side=>handlers[side==='left'?'suggestions-open':'context-open'](),
+ onClose:()=>handlers['context-close'](),
 });
-document.addEventListener('pointerup',event=>{
- if(!contextSwipe)return;const {x,y,close,side}=contextSwipe;contextSwipe=null;
- const dx=event.clientX-x,dy=event.clientY-y,direction=side==='left'?1:-1;
- if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3&&dx*direction*(close?-1:1)>0)handlers[close?'context-close':side==='left'?'suggestions-open':'context-open']();
-});
-document.addEventListener('pointercancel',()=>{contextSwipe=null;});
 window.addEventListener('popstate',()=>void route());
 window.addEventListener('beforeunload',()=>stream?.close());
 function countdown(){
