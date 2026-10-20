@@ -18,13 +18,12 @@ export function providerFields(provider={}) {
       ${field('模型列表地址（可选，留空按请求端点推导）','models_endpoint',provider.models_endpoint || '','url','class="mono" placeholder="https://api.example.com/v1/models" maxlength="2000"')}
       <div class="actions" style="margin-top:12px">
         <button type="button" class="button secondary small" data-fetch-models>${icon('download',14)} 拉取模型</button>
-        <span class="hint">可使用尚未保存的端点和密钥。</span>
       </div>
       <p class="hint model-status" data-model-status role="status" aria-live="polite"></p>
       <div class="model-picker" data-model-picker hidden>
         <label class="field"><span>筛选可用模型</span><input type="search" data-model-search placeholder="输入模型名称筛选…" autocomplete="off"></label>
         <label class="field"><span data-model-count>可用模型</span><select data-model-choice size="6" aria-label="选择模型"></select></label>
-        <p class="hint">选择后会填入模型名称；保存供应商配置后生效。</p>
+
       </div>
     </div>
     <div class="inline-checks">
@@ -33,12 +32,12 @@ export function providerFields(provider={}) {
     </div>
     <details class="advanced">
       <summary>高级接口与请求配置</summary>
-      <p class="hint">OpenAI 兼容接口支持根地址、/v1 基址或完整请求 URL；其他协议填写完整请求 URL。Anthropic 常用鉴权头为 x-api-key，前缀留空。额外请求头已有值不会返回浏览器，同名空值表示保留，删除键可移除。</p>
+
       <div class="form-grid">
         ${field('鉴权请求头','auth_header',provider.auth_header || 'Authorization')}
         ${field('鉴权前缀（含空格）','auth_prefix',provider.auth_prefix ?? 'Bearer ')}
         ${field('请求超时 / 秒','timeout',provider.timeout || 60,'number','min="5" max="180" required')}
-        ${field('最大输出 token','max_tokens',provider.max_tokens || 2048,'number','min="128" max="8192" required')}
+        ${field('最大输出 token','max_tokens',provider.max_tokens || 4096,'number','min="128" max="8192" required')}
         ${field('温度','temperature',provider.temperature ?? .5,'number','min="0" max="2" step="0.1" required')}
         ${field('对话响应文本路径','response_path',provider.response_path || 'choices.0.message.content')}
         ${field('模型列表路径（顶层数组可留空）','models_path',provider.models_path ?? 'data','text','maxlength="200" placeholder="data 或 result.models"')}
@@ -47,7 +46,7 @@ export function providerFields(provider={}) {
       ${textarea('额外请求头 JSON','headers',JSON.stringify(provider.headers || {},null,2),'class="code-input" rows="3"')}
       ${textarea('额外请求参数 JSON','extra_body',JSON.stringify(provider.extra_body || {},null,2),'class="code-input" rows="3"')}
       ${textarea('自定义协议请求模板 JSON','request_template',JSON.stringify(provider.request_template || {},null,2),'class="code-input" rows="4"')}
-      <p class="hint">自定义模板中的值可使用 "$messages"（必须）、"$conversation"、"$system"、"$model"、"$input"、"$max_tokens"、"$temperature"，均按完整值替换。例如 {"model":"$model","messages":"$messages"}。响应路径支持 data.answer 或 content.0.text。</p>
+
     </details>
   </div>`;
 }

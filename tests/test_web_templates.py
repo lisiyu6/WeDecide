@@ -41,7 +41,8 @@ class PreferenceTemplateTests(unittest.TestCase):
         forms=[attrs.get('id') for tag,attrs in self.elements.nodes if tag=='form']
         self.assertIn('interview-form',forms)
         self.assertIn('preference-form',forms)
-        self.assertGreaterEqual(len([tag for tag,_ in self.elements.nodes if tag=='table']),2)
+        self.assertIn('data-pref-summary',self.html)
+        self.assertIn('data-pref-edit-area hidden',self.html)
         self.assertEqual(len(self.elements.matching('data-pref-confirm')), 1)
         self.assertEqual(len(self.elements.matching('data-pref-validation')), 1)
 
@@ -59,11 +60,11 @@ class PreferenceTemplateTests(unittest.TestCase):
             self.assertNotIn('hidden',elements.matching('data-interview-panel')[0])
             self.assertEqual(len(elements.matching('data-choice')),2)
 
-    def test_notes_placeholder_cannot_consume_following_markup(self):
+    def test_notes_textarea_cannot_consume_the_confirmation_controls(self):
         notes = [attrs for tag, attrs in self.elements.nodes if tag == 'textarea' and attrs.get('name') == 'notes']
         self.assertEqual(len(notes), 1)
-        self.assertNotIn('<', notes[0]['placeholder'])
-        self.assertNotIn('>', notes[0]['placeholder'])
+        self.assertEqual(len(self.elements.matching('data-pref-confirm')),1)
+        self.assertEqual(self.html.count('<textarea'),self.html.count('</textarea>'))
 
 
 class AccountTemplateTests(unittest.TestCase):
@@ -124,7 +125,7 @@ class DecisionFlowTemplateTests(unittest.TestCase):
         self.assertLess(compare.index('方案 B · V1'),compare.index('方案 A · V1'))
         details=[x for x in Elements(compare).matching('data-proposal-detail')]
         self.assertEqual(len(details),2)
-        self.assertIn('方案事实、步骤、费用、我的匹配与冲突',compare)
+        self.assertIn('查看具体方案、费用依据与我的匹配',compare)
         self.assertNotIn('自定义活动行程',compare)
         self.assertNotIn('YOUR NEXT STEP',html['overview'])
         self.assertNotIn('请房主先添加候选活动',html['overview'])
@@ -143,7 +144,7 @@ class ContinuousInputTemplateTests(unittest.TestCase):
         html=json.loads(result.stdout)
         self.assertEqual(len([attrs for tag,attrs in Elements(html['knowledge']).nodes if tag=='form' and attrs.get('id')=='knowledge-form']),1)
         self.assertIn('name="visibility"',html['notes'])
-        self.assertIn('仅本人可见，整理为我的需求',html['notes'])
+        self.assertIn('<option value="private" selected>仅自己</option>',html['notes'])
         self.assertIn('data-action="resolve-date"',html['create'])
         self.assertIn('name="date_expression"',html['create'])
 
@@ -172,13 +173,14 @@ class SideCardTemplateTests(unittest.TestCase):
 class DecisionGuidanceTests(unittest.TestCase):
     def test_next_step_tracks_confirmed_data_and_real_vote_state(self):
         script="""
-          import {decisionFlow} from './web/flow.js';
+          import {decisionFlow,taskPanel} from './web/flow.js';
+          const guided=state=>decisionFlow(state)+taskPanel(state);
           const room={code:'R',state:'COLLECTING',host_id:'h',input_version:1,context_version:1,me:{id:'h',confirmed:false},members:[{id:'h',status:'approved',confirmed:false}],resources:[],proposals:[]};
-          const initial=decisionFlow({room,tab:'overview'});
+          const initial=guided({room,tab:'overview'});
           room.me.confirmed=true;room.members[0].confirmed=true;room.resources=[{confirmed:true}];room.proposals=[{id:'p',input_version:1,evaluation:{status:'FEASIBLE'}}];room.selected_id='p';room.state='COMPARING';
-          const ready=decisionFlow({room,tab:'overview'});
-          room.state='VOTING';room.vote={my_vote:null};const voting=decisionFlow({room,tab:'overview'});
-          room.state='APPROVED';const finished=decisionFlow({room,tab:'overview'});
+          const ready=guided({room,tab:'overview'});
+          room.state='VOTING';room.vote={my_vote:null};const voting=guided({room,tab:'overview'});
+          room.state='APPROVED';const finished=guided({room,tab:'overview'});
           console.log(JSON.stringify({initial,ready,voting,finished}));
         """
         out=subprocess.run(['node','--input-type=module','-e',script],cwd=ROOT,check=True,capture_output=True,text=True)
@@ -192,7 +194,7 @@ class DecisionGuidanceTests(unittest.TestCase):
 
 
 class ZenFlowTemplateTests(unittest.TestCase):
-    def test_zen_comparison_shows_one_option_and_keeps_reachable_navigation(self):
+    def test_comparison_keeps_all_options_and_one_mobile_focus_with_reachable_navigation(self):
         from wedecide import domain
         from wedecide.models import CreateRoom,Preference,Resource
         room=domain.new_room('host',CreateRoom(username='房主',scenario={'title':'禅模式'}),8)
@@ -208,8 +210,10 @@ class ZenFlowTemplateTests(unittest.TestCase):
         """
         result=subprocess.run(['node','--input-type=module','-e',script],input=json.dumps(domain.view(room,'host')),cwd=ROOT,check=True,capture_output=True,text=True)
         html=json.loads(result.stdout)
-        self.assertEqual(len(Elements(html['compare']).matching('data-proposal-id')),1)
-        self.assertIn('下一个方案',html['compare'])
+        proposals=Elements(html['compare']).matching('data-proposal-id')
+        self.assertEqual(len(proposals),3)
+        self.assertEqual(sum('is-focused' in element.get('class','') for element in proposals),1)
+        self.assertIn('aria-label="选择要查看的方案"',html['compare'])
         self.assertIn('aria-label="空间操作"',html['layout'])
         self.assertIn('退出禅模式',html['layout'])
 

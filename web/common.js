@@ -23,7 +23,19 @@ export function toast(text,error=false){
  clearTimeout(toastTimers.get(node));toastTimers.set(node,setTimeout(()=>node.remove(),5000));
  while(root.children.length>3){const oldest=root.firstElementChild;clearTimeout(toastTimers.get(oldest));oldest.remove();}
 }
-export async function api(path, options={}) { const response=await fetch(path,{credentials:'same-origin',...options,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...options.headers},body:options.body ? JSON.stringify(options.body) : undefined}); let data; try {data=await response.json();} catch {data={detail:'服务器暂时没有返回有效数据'};} if(!response.ok) {const error=new Error(data.detail || '操作失败'); error.status=response.status; error.fields=data.fields; throw error;} return data; }
+export async function api(path, options={}) {
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),options.timeout??180000);
+ try{
+  const response=await fetch(path,{credentials:'same-origin',...options,signal:options.signal||controller.signal,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...options.headers},body:options.body?JSON.stringify(options.body):undefined});
+  let data;try{data=await response.json();}catch{throw new Error('服务器返回的内容不完整，请刷新后重试；已填写的内容会保留。');}
+  if(!response.ok){const error=new Error(typeof data.detail==='string'?data.detail:'请核对填写内容后重试');error.status=response.status;error.fields=data.fields;throw error;}
+  return data;
+ }catch(error){
+  if(error.name==='AbortError')throw new Error('请求等待超时，请刷新确认是否已保存后重试；已填写的内容会保留。');
+  if(error instanceof TypeError)throw new Error('连接暂时中断，请检查服务是否运行，再刷新同步；已填写的内容会保留。');
+  throw error;
+ }finally{clearTimeout(timer);}
+}
 export const post=(path,body={})=>api(path,{method:'POST',body});
 export function field(label,name,value='',type='text',extra='') {return `<label class="field"><span>${esc(label)}</span><input type="${type}" name="${esc(name)}" value="${esc(value ?? '')}" ${extra}></label>`;}
 export function textarea(label,name,value='',extra='') {return `<label class="field"><span>${esc(label)}</span><textarea name="${esc(name)}" ${extra}>${esc(value)}</textarea></label>`;}
@@ -35,7 +47,19 @@ export function formData(form) {return Object.fromEntries(new FormData(form));}
 export function jsonField(form,name) {try {return JSON.parse(form.elements[name].value || '{}');} catch {throw new Error(`${name} 必须是合法 JSON 对象`);}}
 export function empty(title,description,action='') {return `<div class="empty"><div class="empty-symbol">${icon('leaf',30)}</div><h3>${esc(title)}</h3><p>${esc(description)}</p>${action}</div>`;}
 export function dialog(title,content) {const node=$('#dialog'); node.innerHTML=`<div class="dialog-heading"><h2>${esc(title)}</h2><button class="icon-button" data-close-dialog aria-label="关闭">${icon('close')}</button></div>${content}`; if(!node.open)node.showModal(); node.querySelector('[data-close-dialog]').onclick=()=>node.close(); return node;}
-export async function confirmAction(title,text,action,options={}) {const node=dialog(title,`<p class="muted">${esc(text)}</p><div class="actions"><button class="button secondary" data-cancel>返回</button><button class="button${options.danger?' danger':''}" data-confirm>${esc(options.confirmLabel||'确认')}</button></div>`); node.querySelector('[data-cancel]').onclick=()=>node.close(); node.querySelector('[data-confirm]').onclick=async e=>{const button=e.currentTarget;button.disabled=true;try{await action();node.close();}catch(error){toast(error.message,true);button.disabled=false;}};}
+export async function confirmAction(title,text,action,options={}) {
+ const node=dialog(title,`<p class="muted">${esc(text)}</p><p class="notice error" data-confirm-error role="alert" hidden></p><div class="actions"><button class="button secondary" data-cancel>返回</button><button class="button${options.danger?' danger':''}" data-confirm>${esc(options.confirmLabel||'确认')}</button></div>`);
+ const cancel=node.querySelector('[data-cancel]'),errorNode=node.querySelector('[data-confirm-error]');
+ cancel.onclick=()=>node.close();
+ node.querySelector('[data-confirm]').onclick=async event=>{
+  const button=event.currentTarget,original=button.innerHTML;
+  button.disabled=true;cancel.disabled=true;button.setAttribute('aria-busy','true');
+  button.innerHTML='<span class="spinner" aria-hidden="true"></span> 正在处理…';errorNode.hidden=true;
+  try{await action();node.close();}
+  catch(error){errorNode.textContent=error.message||'操作未完成，请重试';errorNode.hidden=false;}
+  finally{button.disabled=false;cancel.disabled=false;button.removeAttribute('aria-busy');button.innerHTML=original;}
+ };
+}
 export async function copy(text) {try {await navigator.clipboard.writeText(text);toast('链接已复制');}catch {dialog('复制链接',`<p class="muted">当前浏览器不允许自动复制，请选中下方链接复制。</p><input class="copy-input" readonly value="${esc(text)}">`);$('.copy-input').select();}}
 export function saveDraft(key,value) {try{localStorage.setItem(key,JSON.stringify(value));}catch{}}
 export function loadDraft(key) {try{return JSON.parse(localStorage.getItem(key));}catch{return null;}}

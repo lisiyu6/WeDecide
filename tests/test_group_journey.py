@@ -101,9 +101,9 @@ class GroupJourneyTests(unittest.TestCase):
         pages=json.loads(output.stdout)
         self.assertNotIn('启动决策 Agent',pages['overview'])
         self.assertNotIn('id="agent-form"',pages['overview'])
-        self.assertIn('大家的共同决定',pages['overview'])
-        self.assertIn('查看伙伴准备情况',pages['overview'])
-        self.assertIn('我们一起决定',pages['preferences'])
+        self.assertIn('共同决定',pages['overview'])
+        self.assertIn('data-disclosure="group-preparation"',pages['overview'])
+        self.assertIn('一起决定',pages['preferences'])
         self.assertIn('data-interview-card',pages['preferences'])
         self.assertEqual(pages['routes'],['preferences','overview','vote','result'])
 

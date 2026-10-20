@@ -1,9 +1,10 @@
 import {chooseInterviewAnswer,currentInterviewInput,interviewInputAnswer} from './interview-input.js';
 import {defaultDecisionView} from './flow.js';
+import {withFeedback,syncFeedback,actionMessages,formMessages} from './feedback.js';
 import {buildCreationScenario} from './creation.js';
 import {$,$$,setText,esc,logo,icon,api,post,toast,dialog,confirmAction,copy,formData,formId,number,minutes,time,field,textarea,select,badge,labels,terminal,empty,saveDraft,loadDraft,deleteDraft,startSpeech,captureInputs,restoreInputs,dateTime,money,score,themeControl} from './common.js';
 import {contextDrawer,mountContextDrawer,resolveDate} from './context.js';
-import {manualPlanForm} from './decision.js';
+import {manualPlanForm,agentReviewForm} from './decision.js';
 import {home,creation,joinPage,waiting,accountPage} from './pages.js';
 import {layout,tabs,resourceForm} from './room-views.js';
 import {readProvider,installProviderModels,renderProviderModels} from './provider.js';
@@ -68,6 +69,7 @@ function render(preserve=false) {
    countdown();
  }
  document.title=state.room?.scenario?.title?`${state.room.scenario.title} · WeDecide`:'WeDecide · 一起，做个好决定';
+ syncFeedback();
 }
 async function refresh(preserve=true) {
  if(state.route!=='room'||!state.room)return;
@@ -96,7 +98,7 @@ async function refresh(preserve=true) {
    }
    if(state.interviewInput?.active&&!currentInterviewInput(state))clearInterviewInput();
    const interview=latestInterview(state);
-   if(interview&&interview.id!==state.interviewSeenId){state.interviewSeenId=interview.id;if(state.tab==='preferences'&&interview.metadata.interview.ready)state.prefStep=1;}
+   if(interview&&interview.id!==state.interviewSeenId){state.interviewSeenId=interview.id;if(state.tab==='preferences'&&interview.metadata.interview.ready&&interview.metadata.mode!=='preserved')state.prefStep=1;}
    if(!preserve||oldSnapshot!==JSON.stringify([state.room,state.provider,state.messages]))render(preserve&&(state.tab!=='vote'||sameVote));
  }catch(error){
    if(version===routeVersion&&error.status===404){if(deletingRoom!==key)leaveDeletedRoom(state.room);}
@@ -116,6 +118,7 @@ async function route() {
  const version=++routeVersion;stream?.close();stream=null;clearInterval(displayTimer);
  state.connected=false;state.menu=false;state.contextOpen=false;document.body.classList.remove('context-open');state.voteSession=null;state.dirtyForms.clear();state.formRevisions={};
  const url=new URL(location.href),parts=url.pathname.split('/').filter(Boolean);
+ document.documentElement.classList.add('is-navigating');$('#app').setAttribute('aria-busy','true');
  try{
    if(parts[0]==='display'&&parts[1]){state.route='display';await showDisplay(parts[1],version);if(version===routeVersion)displayTimer=setInterval(()=>showDisplay(parts[1],version),8000);return;}
    if(!state.bootstrap){const bootstrap=await api('/api/bootstrap');if(version!==routeVersion)return;state.bootstrap=bootstrap;}
@@ -160,9 +163,19 @@ async function route() {
    const retry=`<a href="${esc(url.pathname+url.search)}" data-nav class="button">重新打开${roomLoaded?'这个空间':'页面'}</a>`;
    const message=roomLoaded&&!error.status?'空间已经保存，页面显示时出现问题。可以重新打开，无需再次创建。':error.message;
    $('#app').innerHTML=`<div class="waiting">${logo}<div class="card">${empty(roomLoaded?'空间页面暂时没有显示完整':'暂时没有打开这个空间',message,retry+'<a href="/" data-nav class="button secondary">返回首页</a>')}${roomLoaded?`<p class="hint">房间码 ${esc(state.room.code)}</p>`:''}<details class="advanced"><summary>错误详情</summary><p class="hint">${esc(error.message)}</p></details></div></div>`;
- }
+ }finally{if(version===routeVersion){document.documentElement.classList.remove('is-navigating');$('#app').removeAttribute('aria-busy');}}
 }
-function navigate(url) {history.pushState({},'',url);void route();window.scrollTo(0,0);}
+function navigate(url) {
+ const target=new URL(url,location.origin),view=target.searchParams.get('view');
+ history.pushState({},'',target);
+ // Tabs show immediately. Keep the existing stream and synchronize in the background.
+ if(state.route==='room'&&state.room?.me.status==='approved'&&target.pathname===`/r/${state.room.code}`&&tabs.some(t=>t[0]===view)){
+  state.tab=view;state.menu=false;state.contextOpen=false;state.dirtyForms.clear();state.formRevisions={};
+  if(view==='preferences')state.prefStep=target.searchParams.get('stage')==='result'?1:0;
+  render();void refresh(true);
+ }else void route();
+ window.scrollTo(0,0);
+}
 async function mutate(action,payload={},revision=null) {
  const current=state.room.id,version=routeVersion;
  try{
@@ -199,7 +212,7 @@ installProviderModels(form=>{
 async function askInterview(text,interview_action='answer',inputSource=null) {
  if(state.room.ai_pending)throw new Error('AI 正在处理你上一条回答，请稍候');
  const form=$('#preference-form'),draft=form?readPreference(form):interviewDraft(state),room=state.room,version=routeVersion;
- await post(roomPath('/ai'),{kind:'interview',text,draft,interview_action,request_id:crypto.randomUUID?.()||String(Date.now())});
+ await queueAI({kind:'interview',text,draft,interview_action,request_id:crypto.randomUUID?.()||String(Date.now())});
  if(inputSource==null)deleteDraft(`wd-interview-input:${room.id}:${room.me.id}`);
  if(state.room?.id!==room.id||routeVersion!==version)return;
  // Keep submitted values until a new valid card arrives; an upstream error
@@ -207,13 +220,20 @@ async function askInterview(text,interview_action='answer',inputSource=null) {
  if(inputSource==null||currentInterviewInput(state)?.source_message_id!==inputSource)clearInterviewInput();
  state.room.ai_pending=true;state.interviewRaw='';state.dirtyForms.delete('interview-form');deleteDraft(`wd-interview:${state.room.id}:${state.room.me.id}`);state.prefStep=0;render(true);
 }
+async function queueAI(payload){
+ const room=state.room,version=routeVersion,field=payload.kind==='agent'?'agent_pending':'ai_pending';
+ room[field]=true;render(true);
+ try{return await post(`/api/rooms/${encodeURIComponent(room.id)}/ai`,payload);}
+ catch(error){if(state.room?.id===room.id&&routeVersion===version){state.room[field]=false;render(true);}throw error;}
+}
 const handlers={
  'zen':()=>{state.zen=!state.zen;saveDraft('wd-zen',state.zen);render(true);},
- 'focus-members':()=>{state.zen=false;render(true);},
+ 'focus-members':()=>{const r=state.room;dialog('伙伴与加入申请',`<div class="stack">${r.members.map(member=>`<div class="member-row"><div><strong>${esc(member.name)}</strong><p class="hint">${member.status==='pending'?'等待你批准':member.confirmed?'已确认个人需求':'正在独立表达'}</p></div>${member.status==='pending'?`<div class="actions"><button class="button secondary small" data-action="approve" data-id="${esc(member.id)}">同意加入</button><button class="button ghost small" data-action="reject_join" data-id="${esc(member.id)}">拒绝</button></div>`:''}</div>`).join('')}</div>`);},
  'focus-proposal':el=>{state.focusProposal=el.dataset.id;render(true);},
  'context-open':()=>{state.contextOpen=true;state.contextSide='right';render(true);},
+ 'knowledge-open':()=>{state.contextOpen=true;state.contextSide='right';state.contextTab='knowledge';render(true);},
  'suggestions-open':()=>{state.contextOpen=true;state.contextSide='left';render(true);},
- 'organize-suggestions':async()=>{await post(roomPath('/ai'),{kind:'agent',text:'请先整合大家在左侧卡片公开提交的提议，合并相似方向，说明差异和资料缺口，提出可核对的候选草稿。未全员确认需求时先整理，不要伪造校核结果。'});await refresh(true);},
+ 'organize-suggestions':async()=>{await queueAI({kind:'agent',text:'请先整合大家在左侧卡片公开提交的提议，合并相似方向，说明差异和资料缺口，提出可核对的候选草稿。未全员确认需求时先整理，不要伪造校核结果。'});await refresh(true);},
  'context-close':()=>{state.contextOpen=false;render(true);$(state.contextSide==='left'?'[data-action="suggestions-open"]':'[data-action="context-open"]')?.focus();},
  'context-tab':el=>{state.contextTab=el.dataset.tab;render(true);},
  'knowledge-discard':async()=>{state.knowledgeDraft=null;deleteDraft(`wd-knowledge:${state.room.id}:${state.room.me.id}`);state.dirtyForms.delete('knowledge-form');await refresh(true);render(true);},
@@ -223,8 +243,9 @@ const handlers={
  'account-logout':async()=>{await post('/api/auth/logout');stream?.close();state.bootstrap=null;state.room=null;state.messages=[];state.prefDraft=null;state.creationDraft={};deleteDraft('wd-create');navigate('/');},
  'refresh':()=>refresh(true),
  'toggle-agent':el=>mutate('agent_toggle',{enabled:el.dataset.enabled==='true'}),
- 'run-agent':async()=>{await post(roomPath('/ai'),{kind:'agent',text:'请结合本次共同目标、公开提议和全体已确认需求继续整理。已有可比候选时调用实际校核，解释群体取舍；仍有缺项时指出具体资料，不重复访谈成员。'});state.room.agent_pending=true;await refresh(true);},
- 'apply-agent-draft':()=>mutate('agent_draft').then(()=>toast('已采纳为待核对候选；请在房间设置核对事实')),
+ 'run-agent':async()=>{await queueAI({kind:'agent',text:'请结合本次共同目标、公开提议和全体已确认需求继续整理。已有可比候选时调用实际校核，解释群体取舍；仍有缺项时指出具体资料，不重复访谈成员。'});await refresh(true);},
+ 'review-agent-draft':()=>{state.reviewReport=state.room.agent?.updated;dialog('核对共同备选',agentReviewForm(state.room));},
+ 'apply-agent-draft':()=>mutate('agent_draft').then(()=>toast('已保存候选，可直接在共同进展核对资料')),
  'plan-new':()=>{state.planRevision=state.room.revision;dialog('手动编排活动行程',manualPlanForm(state.room));},
  'plan-edit':el=>{state.planRevision=state.room.revision;dialog('编辑活动行程',manualPlanForm(state.room,state.room.manual_plans.find(p=>p.id===el.dataset.id)));},
  'plan-remove':el=>confirmAction('移除自定义行程','相关方案将按最新信息重新评价。',()=>mutate('plans',{plans:state.room.manual_plans.filter(p=>p.id!==el.dataset.id)})),
@@ -238,13 +259,13 @@ const handlers={
  'interview-next':()=>askInterview('请基于已知信息开始一轮简短卡片，只问会影响选择的关键差异；不要重复已有问题。','continue'),
  'interview-focus':()=>{const form=$('#interview-form');const detail=form?.closest('details');if(detail)detail.open=true;$('textarea',form)?.focus();},
  'interview-summary':()=>askInterview('请先把已有回答整合成需求表，保留未知项，停止继续追问。','finish'),
- 'explain-comparison':async()=>{await post(roomPath('/ai'),{kind:'explain',text:'请详细比较当前有效方案，解释与我需求的匹配、复杂取舍、未量化要求和资料缺项，并给出下一步。'});state.room.ai_pending=true;render(true);},
+ 'explain-comparison':async()=>{await queueAI({kind:'explain',text:'请详细比较当前有效方案，解释与我需求的匹配、复杂取舍、未量化要求和资料缺项，并给出下一步。'});},
  'invite':()=>{const base=state.bootstrap.public_url||location.origin;const url=`${base}/r/${state.room.code}`;dialog('让伙伴一起加入',`<p class="muted">分享这个链接或房间码。申请加入后，需要房主批准。</p><div class="room-code">${esc(state.room.code)}</div><input class="copy-input" readonly value="${esc(url)}"><img class="qr" src="${roomPath('/invite.svg')}" alt="房间邀请二维码"><div class="actions"><button class="button" data-action="copy-invite">${icon('link',15)} 复制邀请链接</button></div>`);},
  'copy-invite':()=>copy(`${state.bootstrap.public_url||location.origin}/r/${state.room.code}`),
- 'approve':el=>mutate('approve',{member_id:el.dataset.id}),
- 'reject_join':el=>mutate('reject_join',{member_id:el.dataset.id}),
+ 'approve':async el=>{await mutate('approve',{member_id:el.dataset.id});if($('#dialog').open)handlers['focus-members']();},
+ 'reject_join':async el=>{await mutate('reject_join',{member_id:el.dataset.id});if($('#dialog').open)handlers['focus-members']();},
  'analyze':()=>mutate('analyze'),
- 'select':el=>mutate('select',{proposal_id:el.dataset.id}).then(()=>toast('已选择待投票方案')),
+ 'select':el=>mutate('select',{proposal_id:el.dataset.id}).then(()=>{toast('已选择待投票方案');$('.next-task')?.scrollIntoView({block:'center',behavior:'smooth'});}),
  'start_vote':()=>confirmAction('发起正式投票','本轮将固定成员、条件、方案和截止时间。正式规则从此冻结，所有人对同一版本表达意见。',async()=>{await mutate('start_vote');navigate(`/r/${state.room.code}?view=vote`);}),
  'cancel_vote':()=>confirmAction('取消这一轮投票','已投票记录会保留，但不会继承到下一轮。成员可以重新协商后再投票。',()=>mutate('cancel_vote')),
  'withdraw':()=>confirmAction('退出本次决策','这会结束你的本次成员资格。如果正在投票，本轮会取消并重新计算；当前浏览器不能再次申请本房间。',()=>mutate('withdraw')),
@@ -304,6 +325,14 @@ async function submit(form) {
    deleteDraft('wd-create');state.creationDraft={};navigate(`/r/${room.code}`);break;
   }
   case 'plan-form':{const steps=[];for(let i=0;i<5;i++){if(d[`resource_${i}`]){const start=minutes(d[`start_${i}`]);if(start==null||start<0||start>=1440)throw new Error('请填写有效的活动开始时间');steps.push({resource_id:d[`resource_${i}`],start});}}const plan={id:d.id,title:d.title,description:d.description,steps};await mutate('plans',{plans:d.id?state.room.manual_plans.map(p=>p.id===d.id?plan:p):[...state.room.manual_plans,plan]},state.planRevision);$('#dialog').close();toast('已保存行程，将按全体最新条件重新评价');break;}
+  case 'agent-review-form':{
+   if(state.reviewReport!==state.room.agent?.updated)throw new Error('共同整理已更新，请关闭并重新打开核对窗口；原候选没有被覆盖。');
+   const resources=[...(state.room.agent.resources||[]),...(state.room.agent.resource_updates||[])].map((resource,i)=>{
+    const attributes={};Object.keys(resource.attributes||{}).forEach((name,j)=>{if(d[`attribute_${i}_${j}`]!=='unknown')attributes[name]=d[`attribute_${i}_${j}`]==='true';});
+    return {...resource,attributes,name:d[`name_${i}`].trim(),cost:number(d[`cost_${i}`]),cost_upper:number(d[`upper_${i}`]),source:d[`source_${i}`],confirmed:form.elements[`confirmed_${i}`].checked,verified:false};
+   });
+   await mutate('agent_draft',{reviewed_resources:resources,report_updated:state.reviewReport});$('#dialog').close();toast('已保存核对结果，将按全体确认需求继续计算');break;
+  }
   case 'interview-value-form':{
    const input=currentInterviewInput(state);
    if(!input||String(input.source_message_id)!==form.dataset.sourceMessage)throw new Error('问题已变化，请返回当前卡片重新选择');
@@ -325,6 +354,7 @@ async function submit(form) {
    }finally{
     state.savingPreferences.delete(roomId);if(state.room?.id===roomId)render(true);
    }
+   if(state.room?.id===roomId)navigate(`/r/${state.room.code}?view=overview`);
    break;
   }
   case 'chat-form':{
@@ -366,16 +396,18 @@ document.addEventListener('click',async event=>{
  const speech=event.target.closest('[data-speech]');if(speech){startSpeech(speech.dataset.speech,speech);return;}
  const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
  const handler=handlers[el.dataset.action];if(!handler)return;
- event.preventDefault();el.disabled=true;
- try{await handler(el);}catch(error){toast(error.message,true);}finally{el.disabled=false;}
+ event.preventDefault();
+ const message=actionMessages[el.dataset.action];
+ if(message){await withFeedback(`${state.room?.id||state.route}:${el.dataset.action}:${el.dataset.id||''}`,el,message,()=>handler(el));return;}
+ try{await handler(el);}catch(error){toast(error.message,true);}
 });
 const pendingForms=new Set();
 document.addEventListener('submit',async event=>{
  if(!(event.target instanceof HTMLFormElement))return;event.preventDefault();
  const pendingKey=`${state.room?.id||state.route}:${formId(event.target)}`;
  if(pendingForms.has(pendingKey))return;pendingForms.add(pendingKey);
- const button=event.submitter,old=button?.innerHTML;if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> 正在处理';}
- try{await submit(event.target);}catch(error){toast(error.message,true);}finally{pendingForms.delete(pendingKey);if(button){button.disabled=false;button.innerHTML=old;}if(formId(event.target)==='preference-form')updatePreferenceFeedback(event.target);}
+ try{await withFeedback(pendingKey,event.target,formMessages[formId(event.target)]||'正在保存你的操作…',()=>submit(event.target));}
+ finally{pendingForms.delete(pendingKey);if(formId(event.target)==='preference-form')updatePreferenceFeedback(event.target);}
 });
 document.addEventListener('input',event=>{
  const form=event.target.form;if(!form)return;
@@ -404,7 +436,7 @@ document.addEventListener('input',event=>{
 });
 document.addEventListener('change',event=>{
  const form=event.target.form;
- if(formId(form)==='room-provider'&&event.target.name==='mode')$('#custom-provider-fields').hidden=event.target.value!=='custom';
+ if(formId(form)==='room-provider'&&event.target.name==='mode'){$('#custom-provider-fields').hidden=event.target.value!=='custom';$('#global-provider-field').hidden=event.target.value==='custom';}
  if(formId(form)==='fairness-sim')render(true);
  if(formId(form)==='resource-form'&&event.target.name==='kind'){$('[data-activity-fields]',form).hidden=event.target.value==='decision';}
 });
@@ -427,6 +459,10 @@ document.addEventListener('pointercancel',()=>{contextSwipe=null;});
 window.addEventListener('popstate',()=>void route());
 window.addEventListener('beforeunload',()=>stream?.close());
 function countdown(){
+ for(const el of $$('[data-elapsed]')){
+  const seconds=Math.max(0,Math.floor(Date.now()/1000-Number(el.dataset.elapsed)));
+  el.textContent=seconds<60?`已等待 ${seconds} 秒`:`已等待 ${Math.floor(seconds/60)} 分 ${seconds%60} 秒`;
+ }
  for(const el of $$('[data-deadline]')){
   const remaining=Math.max(0,Math.ceil(Number(el.dataset.deadline)-Date.now()/1000));
   const hours=Math.floor(remaining/3600),minutes=Math.floor(remaining%3600/60),seconds=remaining%60;
@@ -436,6 +472,7 @@ function countdown(){
 }
 setInterval(countdown,1000);
 setInterval(()=>{if(state.route==='room'&&!state.connected)void refresh(true);},10000);
+setInterval(()=>{if(state.route==='room'&&(state.room?.ai_pending||state.room?.agent_pending))void refresh(true);},3000);
 async function showDisplay(token,version){
  try{const d=await api(`/api/display/${encodeURIComponent(token)}`);if(version!==routeVersion)return;$('#app').innerHTML=`<main id="main" class="showcase"><div class="between">${logo}${themeControl}<span class="badge">只读投屏 · 自动更新</span></div><h1>${esc(d.scenario.title)}</h1><p class="muted">${esc(d.scenario.city)} · ${esc(d.scenario.date)} · ${labels[d.state]||d.state}</p><div class="three-columns"><div class="card metric"><div class="metric-label">有效参与</div><div class="metric-value">${d.member_count} 人</div></div><div class="card metric"><div class="metric-label">已确认需求</div><div class="metric-value">${d.ready_count} 人</div></div><div class="card metric"><div class="metric-label">正式投票轮次</div><div class="metric-value">${d.vote?.round||d.round||'—'}</div></div></div><div class="proposal-grid">${d.proposals.map(p=>`<div class="card proposal"><h2>${esc(p.title)}</h2><div class="proposal-score"><strong>${score(p.evaluation.score)}</strong><small>群体预测分 · 覆盖 ${p.evaluation.coverage.join('/')}</small></div>${badge(p.evaluation.status)}<p class="hint" style="margin-top:18px">${money(p.evaluation.cost)} / 人 · ${p.evaluation.kind==='decision'?'通用备选':time(p.evaluation.start)+' – '+time(p.evaluation.end)}</p></div>`).join('')}</div>${d.vote?`<div class="card" style="margin-top:25px"><div class="between"><h2>投票进度 ${d.vote.submitted} / ${d.vote.total}</h2>${badge(d.vote.status)}</div><p class="hint" style="margin-top:10px">至少 ${d.vote.required} 人明确接受 · 截止 ${dateTime(d.vote.deadline)}</p></div>`:''}<p class="hint" style="margin-top:30px">投屏只展示汇总信息，不展示成员的私密条件、消息与理由。</p></main>`;}catch(error){if(version===routeVersion)$('#app').innerHTML=`<div class="waiting">${empty('投屏暂不可用',error.message)}</div>`;}}
 void route();
